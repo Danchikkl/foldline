@@ -5,6 +5,7 @@ export const uploadRequestSchema = z.object({
   filename: z.string().min(1).max(180),
   contentType: z.enum(ALLOWED_UPLOAD_TYPES),
   size: z.number().int().positive().max(MAX_UPLOAD_BYTES),
+  shipmentId: z.string().uuid().optional(),
 });
 
 export const shipmentCreateSchema = z.object({
