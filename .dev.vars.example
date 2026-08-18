@@ -1,0 +1,2 @@
+# OpenNext/Cloudflare local worker preview helper.
+NEXTJS_ENV=development

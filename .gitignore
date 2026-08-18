@@ -1,0 +1,12 @@
+.next/
+.open-next/
+node_modules/
+.env
+.env.local
+.wrangler/
+.DS_Store
+*.log
+services/ocr-gateway/.venv/
+services/ocr-gateway/__pycache__/
+
+.dev.vars
