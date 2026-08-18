@@ -7,6 +7,13 @@ export const uploadRequestSchema = z.object({
   size: z.number().int().positive().max(MAX_UPLOAD_BYTES),
 });
 
+export const shipmentCreateSchema = z.object({
+  organizationId: z.string().uuid().optional(),
+  reference: z.string().trim().min(1).max(120),
+  origin: z.string().trim().max(120).optional().default(""),
+  destination: z.string().trim().max(120).optional().default(""),
+});
+
 const evidenceField = z.object({
   value: z.union([z.string(), z.number(), z.null()]),
   confidence: z.number().min(0).max(1),
