@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, FileText, ShieldAlert, ShieldCheck } from "lucide-react";
 import { requireUser } from "@/lib/auth";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { ShipmentUploadDropzone } from "@/components/shipment-upload-dropzone";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
@@ -51,12 +52,7 @@ export default async function ShipmentPage({ params }: Props) {
         </header>
 
         <div className="dashGrid">
-          <section className="insightCard">
-            <span className="eyebrow">Documents</span>
-            <h3>{documents?.length ?? 0} files in this shipment</h3>
-            <p>Invoice, Packing List, PO and transport documents will be grouped here and compared against each other.</p>
-            <div className="insightStat"><FileText/><div><b>Next step</b><span>Multi-file shipment upload is being wired to this page.</span></div></div>
-          </section>
+          <ShipmentUploadDropzone shipmentId={shipment.id} />
 
           <section className="insightCard">
             <span className="eyebrow">Checks</span>
@@ -75,7 +71,7 @@ export default async function ShipmentPage({ params }: Props) {
                 <div className="docName"><b>{d.original_filename}</b><span>{d.document_type ? d.document_type.replaceAll("_", " ") : "Unclassified"}</span></div>
                 <span className={`status status-${d.status}`}>{d.status}</span>
               </Link>
-            )) : <div className="emptyList">No documents yet. The next step is connecting multi-file upload to this shipment.</div>}
+            )) : <div className="emptyList">No documents yet. Add Invoice, Packing List, PO, CMR or other shipment files above.</div>}
           </div>
         </section>
 
