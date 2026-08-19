@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assertSameOrigin, jsonError } from "@/lib/http";
-import { headObject, deleteObject } from "@/lib/r2";
+import { deleteDocumentObject, getDocumentInfo } from "@/lib/storage";
 import { MAX_UPLOAD_BYTES } from "@/lib/constants";
 import { dispatchOcr } from "@/lib/ocr";
 
@@ -29,15 +29,17 @@ export async function POST(request: Request) {
 
   const admin = createAdminClient();
   try {
-    const head = await headObject(doc.storage_key);
-    const actual = Number(head.ContentLength || 0);
+    const info = await getDocumentInfo(doc.storage_key);
+    const actual = Number(info.size || 0);
+    const actualType = String(info.contentType || "");
+
     if (actual <= 0 || actual > MAX_UPLOAD_BYTES || actual !== Number(doc.size_bytes)) {
-      await deleteObject(doc.storage_key);
+      await deleteDocumentObject(doc.storage_key);
       await admin.from("documents").update({ status: "failed", error_message: "Upload size verification failed." }).eq("id", doc.id).eq("owner_id", user.id);
       return jsonError("Uploaded object failed integrity checks.", 400);
     }
-    if (head.ContentType && head.ContentType !== doc.content_type) {
-      await deleteObject(doc.storage_key);
+    if (actualType && actualType !== doc.content_type) {
+      await deleteDocumentObject(doc.storage_key);
       await admin.from("documents").update({ status: "failed", error_message: "Content type mismatch." }).eq("id", doc.id).eq("owner_id", user.id);
       return jsonError("Content type mismatch.", 400);
     }
@@ -46,16 +48,17 @@ export async function POST(request: Request) {
     const { data: job, error: jobError } = await admin.from("processing_jobs").insert({ document_id: doc.id, status: "queued" }).select("id").single();
     if (jobError || !job) throw new Error("Could not create processing job.");
 
+    // Storage is now complete even if OCR is not configured yet.
     try {
       await dispatchOcr(doc);
       await admin.from("processing_jobs").update({ status: "processing" }).eq("id", job.id);
     } catch (error) {
       await admin.from("processing_jobs").update({ status: "failed", finished_at: new Date().toISOString() }).eq("id", job.id);
-      throw error;
+      console.warn("OCR dispatch is not available yet", error);
     }
     return Response.json({ ok: true });
   } catch (e) {
     console.error("upload-complete failed", e);
-    return jsonError("Could not verify or queue this upload.", 502);
+    return jsonError("Could not verify this upload.", 502);
   }
 }
