@@ -23,7 +23,9 @@ export async function POST(request: Request) {
     .maybeSingle();
   if (!doc) return jsonError("Document not found.", 404);
   if (doc.status !== "uploading") {
-    if (["queued", "processing", "ready", "reviewed"].includes(doc.status)) return Response.json({ ok: true, status: doc.status });
+    if (["queued", "processing", "ready", "reviewed", "failed"].includes(doc.status)) {
+      return Response.json({ ok: true, status: doc.status });
+    }
     return jsonError("This upload cannot be completed in its current state.", 409);
   }
 
@@ -45,18 +47,26 @@ export async function POST(request: Request) {
     }
 
     await admin.from("documents").update({ status: "queued", error_message: null }).eq("id", doc.id).eq("owner_id", user.id);
-    const { data: job, error: jobError } = await admin.from("processing_jobs").insert({ document_id: doc.id, status: "queued" }).select("id").single();
+    const { data: job, error: jobError } = await admin
+      .from("processing_jobs")
+      .insert({ document_id: doc.id, status: "queued" })
+      .select("id")
+      .single();
     if (jobError || !job) throw new Error("Could not create processing job.");
 
-    // Storage is now complete even if OCR is not configured yet.
     try {
       await dispatchOcr(doc);
       await admin.from("processing_jobs").update({ status: "processing" }).eq("id", job.id);
+      return Response.json({ ok: true, status: "processing" });
     } catch (error) {
       await admin.from("processing_jobs").update({ status: "failed", finished_at: new Date().toISOString() }).eq("id", job.id);
+      await admin.from("documents").update({
+        status: "failed",
+        error_message: "Upload completed successfully. OCR processing is not connected yet.",
+      }).eq("id", doc.id).eq("owner_id", user.id);
       console.warn("OCR dispatch is not available yet", error);
+      return Response.json({ ok: true, status: "failed", processingDeferred: true });
     }
-    return Response.json({ ok: true });
   } catch (e) {
     console.error("upload-complete failed", e);
     return jsonError("Could not verify this upload.", 502);
