@@ -4,6 +4,22 @@ import { assertSameOrigin, jsonError } from "@/lib/http";
 import { documentPatchSchema } from "@/lib/schemas";
 import { validateInvoice } from "@/lib/invoice";
 
+export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return jsonError("Unauthorized", 401);
+
+  const { data: doc } = await supabase
+    .from("documents")
+    .select("id,status,error_message,updated_at")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (!doc) return jsonError("Not found.", 404);
+  return Response.json(doc, { headers: { "cache-control": "no-store" } });
+}
+
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try { assertSameOrigin(request); } catch (r) { return r as Response; }
   const { id } = await params;
