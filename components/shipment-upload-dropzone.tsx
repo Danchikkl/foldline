@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { FileUp, ShieldCheck, Sparkles } from "lucide-react";
 import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from "@/lib/constants";
 import { createClient } from "@/lib/supabase/browser";
-import { DOCUMENT_BUCKET } from "@/lib/storage";
+
+const DOCUMENT_BUCKET = "foldline-documents";
 
 export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
   const input = useRef<HTMLInputElement>(null);
