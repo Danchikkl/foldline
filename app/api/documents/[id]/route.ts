@@ -4,6 +4,8 @@ import { assertSameOrigin, jsonError } from "@/lib/http";
 import { documentPatchSchema } from "@/lib/schemas";
 import { validateInvoice } from "@/lib/invoice";
 
+const STALE_PROCESSING_MS = 2 * 60 * 1000;
+
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = await createClient();
@@ -12,11 +14,42 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
 
   const { data: doc } = await supabase
     .from("documents")
-    .select("id,status,error_message,updated_at")
+    .select("id,status,error_message,updated_at,created_at")
     .eq("id", id)
     .maybeSingle();
 
   if (!doc) return jsonError("Not found.", 404);
+
+  const isInFlight = ["uploading", "queued", "processing"].includes(doc.status);
+  const lastTouched = new Date(doc.updated_at || doc.created_at).getTime();
+  const isStale = Number.isFinite(lastTouched) && Date.now() - lastTouched > STALE_PROCESSING_MS;
+
+  if (isInFlight && isStale) {
+    const admin = createAdminClient();
+    const message = "Upload completed, but processing did not start. OCR is not connected yet.";
+
+    await admin
+      .from("documents")
+      .update({
+        status: "failed",
+        error_message: message,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .eq("owner_id", user.id);
+
+    await admin
+      .from("processing_jobs")
+      .update({ status: "failed", finished_at: new Date().toISOString() })
+      .eq("document_id", id)
+      .in("status", ["queued", "processing"]);
+
+    return Response.json(
+      { ...doc, status: "failed", error_message: message },
+      { headers: { "cache-control": "no-store" } },
+    );
+  }
+
   return Response.json(doc, { headers: { "cache-control": "no-store" } });
 }
 
