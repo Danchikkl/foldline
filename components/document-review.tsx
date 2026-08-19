@@ -12,17 +12,57 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
   const [data, setData] = useState<InvoiceData | null>(doc.extracted_data);
   const [validation, setValidation] = useState<ValidationResult | null>(doc.validation_data);
   const [fileUrl, setFileUrl] = useState<string>("");
+  const [status, setStatus] = useState(doc.status);
+  const [statusError, setStatusError] = useState(doc.error_message || "");
   const [proof, setProof] = useState(true);
   const [exceptionsOnly, setExceptionsOnly] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
-  useEffect(() => { fetch(`/api/documents/${doc.id}/file`).then((r) => r.ok ? r.json() : Promise.reject()).then((x) => setFileUrl(x.url)).catch(() => {}); }, [doc.id]);
   useEffect(() => {
-    if (["queued","processing","uploading"].includes(doc.status)) {
-      const t = setInterval(() => window.location.reload(), 3500); return () => clearInterval(t);
-    }
-  }, [doc.status]);
+    fetch(`/api/documents/${doc.id}/file`)
+      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then((x) => setFileUrl(x.url))
+      .catch(() => {});
+  }, [doc.id]);
+
+  useEffect(() => {
+    if (!["queued", "processing", "uploading"].includes(status)) return;
+
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+
+    const poll = async () => {
+      if (stopped) return;
+      attempts += 1;
+      try {
+        const response = await fetch(`/api/documents/${doc.id}`, { cache: "no-store" });
+        if (response.ok) {
+          const current = await response.json();
+          if (stopped) return;
+          if (current.status !== status) {
+            setStatus(current.status);
+            setStatusError(current.error_message || "");
+            if (["ready", "reviewed"].includes(current.status)) {
+              window.location.reload();
+              return;
+            }
+          }
+        }
+      } catch {}
+
+      if (!stopped && attempts < 40 && ["queued", "processing", "uploading"].includes(status)) {
+        timer = setTimeout(poll, 5000);
+      }
+    };
+
+    timer = setTimeout(poll, 2500);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [doc.id, status]);
 
   const visibleFields = useMemo(() => topFields.filter((key) => !exceptionsOnly || !validation || validation.needs_review.includes(key)), [exceptionsOnly, validation]);
   function editField(key: string, value: string) {
@@ -39,8 +79,8 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
     setSaving(false);
   }
 
-  if (["uploading","queued","processing"].includes(doc.status)) return <div className="processingPage"><div className="processingOrb"/><span className="eyebrow">Document pipeline</span><h1>Reading {doc.original_filename}</h1><p>We verify the upload, parse the layout and build Proof Mode. This page refreshes automatically.</p><div className="pipeline"><span className="done">Uploaded</span><i/><span className={doc.status !== "uploading" ? "done":""}>Verified</span><i/><span className={doc.status === "processing" ? "active":""}>OCR</span><i/><span>Proof Mode</span></div></div>;
-  if (doc.status === "failed") return <div className="emptyState"><AlertTriangle/><h2>Processing failed</h2><p>{doc.error_message || "The document could not be processed."}</p><button className="button buttonDark" onClick={() => fetch(`/api/documents/${doc.id}/process`, {method:"POST"}).then(()=>location.reload())}>Retry safely</button></div>;
+  if (["uploading","queued","processing"].includes(status)) return <div className="processingPage"><div className="processingOrb"/><span className="eyebrow">Document pipeline</span><h1>Reading {doc.original_filename}</h1><p>We verify the upload, parse the layout and build Proof Mode. Status checks run quietly in the background.</p><div className="pipeline"><span className="done">Uploaded</span><i/><span className={status !== "uploading" ? "done":""}>Verified</span><i/><span className={status === "processing" ? "active":""}>OCR</span><i/><span>Proof Mode</span></div></div>;
+  if (status === "failed") return <div className="emptyState"><AlertTriangle/><h2>Processing unavailable</h2><p>{statusError || "The document could not be processed."}</p><button className="button buttonDark" onClick={() => fetch(`/api/documents/${doc.id}/process`, {method:"POST"}).then(()=>location.reload())}>Retry processing</button></div>;
   if (!data) return <div className="emptyState"><AlertTriangle/><h2>No extracted data yet</h2></div>;
 
   return <div className="reviewPage">
