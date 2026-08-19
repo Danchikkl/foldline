@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileUp, ShieldCheck, Sparkles } from "lucide-react";
 import { ALLOWED_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from "@/lib/constants";
+import { createClient } from "@/lib/supabase/browser";
+import { DOCUMENT_BUCKET } from "@/lib/storage";
 
 export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
   const input = useRef<HTMLInputElement>(null);
@@ -30,8 +32,11 @@ export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
     if (!presign.ok) throw new Error(data.error || `Could not prepare ${file.name}.`);
 
     setProgress(base + Math.floor(span * 0.35));
-    const put = await fetch(data.uploadUrl, { method: "PUT", headers: { "content-type": file.type }, body: file });
-    if (!put.ok) throw new Error(`${file.name}: upload to private storage failed.`);
+    const supabase = createClient();
+    const { error: uploadError } = await supabase.storage
+      .from(DOCUMENT_BUCKET)
+      .uploadToSignedUrl(data.uploadPath, data.uploadToken, file, { contentType: file.type });
+    if (uploadError) throw new Error(`${file.name}: upload to private storage failed.`);
 
     setProgress(base + Math.floor(span * 0.72));
     const complete = await fetch("/api/uploads/complete", {
