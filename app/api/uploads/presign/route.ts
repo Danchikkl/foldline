@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { uploadRequestSchema } from "@/lib/schemas";
 import { assertSameOrigin, jsonError } from "@/lib/http";
-import { presignUpload } from "@/lib/r2";
+import { createSignedDocumentUpload } from "@/lib/storage";
 import { PLAN_LIMITS } from "@/lib/constants";
 
 export async function POST(request: Request) {
@@ -72,8 +72,8 @@ export async function POST(request: Request) {
   if (error) return jsonError("Could not create document record.", 500);
 
   try {
-    const uploadUrl = await presignUpload(key, contentType);
-    return Response.json({ documentId: id, uploadUrl });
+    const signed = await createSignedDocumentUpload(key);
+    return Response.json({ documentId: id, uploadPath: signed.path, uploadToken: signed.token });
   } catch {
     await admin.from("documents").delete().eq("id", id).eq("owner_id", user.id);
     return jsonError("Could not prepare secure upload.", 502);
