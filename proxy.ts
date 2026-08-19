@@ -11,10 +11,10 @@ function makeCsp(nonce: string) {
     "object-src 'none'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isProd ? "" : " 'unsafe-eval'"}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https://*.r2.cloudflarestorage.com https://www.google-analytics.com https://*.google-analytics.com",
+    "img-src 'self' data: blob: https://*.supabase.co https://www.google-analytics.com https://*.google-analytics.com",
     "font-src 'self' data:",
-    "connect-src 'self' https://*.supabase.co https://*.r2.cloudflarestorage.com https://api.stripe.com https://www.google-analytics.com https://*.google-analytics.com https://region1.google-analytics.com https://www.googletagmanager.com",
-    "frame-src 'self' blob: https://*.r2.cloudflarestorage.com",
+    "connect-src 'self' https://*.supabase.co https://api.stripe.com https://www.google-analytics.com https://*.google-analytics.com https://region1.google-analytics.com https://www.googletagmanager.com",
+    "frame-src 'self' blob: https://*.supabase.co",
     "worker-src 'self' blob:",
     isProd ? "upgrade-insecure-requests" : "",
   ].filter(Boolean).join("; ");
@@ -34,7 +34,9 @@ export async function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     {
-      source: "/((?!api/stripe/webhook|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+      // API route handlers authenticate themselves. Running the auth-refresh proxy
+      // there caused every API request to make two separate Supabase auth calls.
+      source: "/((?!api/|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
       missing: [
         { type: "header", key: "next-router-prefetch" },
         { type: "header", key: "purpose", value: "prefetch" },
