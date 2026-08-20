@@ -5,6 +5,7 @@ import { assertSameOrigin, jsonError } from "@/lib/http";
 import { deleteDocumentObject, getDocumentInfo } from "@/lib/storage";
 import { MAX_UPLOAD_BYTES } from "@/lib/constants";
 import { extractDocumentMarkdown } from "@/lib/ocr";
+import { extractInvoice, validateInvoice } from "@/lib/invoice";
 
 const schema = z.object({ documentId: z.string().uuid() });
 
@@ -84,6 +85,8 @@ export async function POST(request: Request) {
         .eq("id", job.id);
 
       const markdown = await extractDocumentMarkdown(doc);
+      const extracted = extractInvoice(markdown);
+      const validation = validateInvoice(extracted);
       const processedAt = new Date().toISOString();
 
       const { error: documentUpdateError } = await admin
@@ -91,6 +94,8 @@ export async function POST(request: Request) {
         .update({
           status: "ready",
           raw_ocr_text: markdown,
+          extracted_data: extracted,
+          validation_data: validation,
           error_message: null,
           processed_at: processedAt,
         })
@@ -98,7 +103,7 @@ export async function POST(request: Request) {
         .eq("owner_id", user.id);
 
       if (documentUpdateError) {
-        throw new Error("Could not save extracted document text.");
+        throw new Error("Could not save extracted document data.");
       }
 
       await admin
