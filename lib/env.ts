@@ -1,3 +1,5 @@
+import { publicEnv } from "@/lib/public-env";
+
 function get(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
@@ -5,9 +7,9 @@ function get(name: string): string {
 }
 
 export const env = {
-  appUrl: () => get("NEXT_PUBLIC_APP_URL").replace(/\/$/, ""),
-  supabaseUrl: () => get("NEXT_PUBLIC_SUPABASE_URL"),
-  supabasePublishableKey: () => get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"),
+  appUrl: () => (process.env.NEXT_PUBLIC_APP_URL || "https://foldline.d-a-zhakupov.workers.dev").replace(/\/$/, ""),
+  supabaseUrl: () => publicEnv.supabaseUrl(),
+  supabasePublishableKey: () => publicEnv.supabasePublishableKey(),
   supabaseServiceRoleKey: () => get("SUPABASE_SERVICE_ROLE_KEY"),
   r2AccountId: () => get("R2_ACCOUNT_ID"),
   r2AccessKeyId: () => get("R2_ACCESS_KEY_ID"),
