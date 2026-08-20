@@ -12,7 +12,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const { data: doc } = await supabase
     .from("documents")
-    .select("id,storage_key,original_filename,content_type,status")
+    .select("id,storage_key,original_filename,content_type,status,error_message")
     .eq("id", id)
     .maybeSingle();
   if (!doc) return jsonError("Not found", 404);
@@ -25,7 +25,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     .from("processing_jobs")
     .select("id", { count: "exact", head: true })
     .eq("document_id", id);
-  if ((attemptCount ?? 0) >= 3) return jsonError("Retry limit reached. Contact support before processing again.", 429);
+
+  // Jobs created before the Cloudflare AI pipeline was connected should not
+  // consume the retry budget. They failed because the old OCR gateway was absent.
+  const legacyFailure = (doc.error_message || "").toLowerCase().includes("ocr is not connected yet")
+    || (doc.error_message || "").toLowerCase().includes("processing did not start");
+
+  if (!legacyFailure && (attemptCount ?? 0) >= 3) {
+    return jsonError("Retry limit reached. Upload the document again to start a fresh processing attempt.", 429);
+  }
 
   await admin
     .from("documents")
