@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { headers } from "next/headers";
 import { Analytics } from "@/components/analytics";
 import "./globals.css";
 
@@ -33,7 +32,6 @@ export const viewport: Viewport = {
   colorScheme: "light",
 };
 
-export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const nonce = (await headers()).get("x-nonce") || undefined;
-  return <html lang="en"><body>{children}<Analytics nonce={nonce}/></body></html>;
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  return <html lang="en"><body>{children}<Analytics /></body></html>;
 }
