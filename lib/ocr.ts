@@ -1,24 +1,55 @@
-import { env } from "@/lib/env";
-import { presignDownload } from "@/lib/r2";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { createSignedDocumentDownload } from "@/lib/storage";
 
-export async function dispatchOcr(document: { id: string; storage_key: string; original_filename: string; content_type: string }) {
-  const fileUrl = await presignDownload(document.storage_key, 900);
-  const admin = createAdminClient();
-  const response = await fetch(`${env.ocrGatewayUrl()}/v1/jobs`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${env.ocrGatewayToken()}` },
-    body: JSON.stringify({
-      document_id: document.id,
-      file_url: fileUrl,
-      file_name: document.original_filename,
-      content_type: document.content_type,
-      callback_url: `${env.appUrl()}/api/ocr/callback`,
+type ConversionResult = {
+  format: "markdown" | "text" | "error";
+  data?: string;
+  error?: string;
+};
+
+type MarkdownAI = {
+  toMarkdown(input: { name: string; blob: Blob }): Promise<ConversionResult | ConversionResult[]>;
+};
+
+export async function extractDocumentMarkdown(document: {
+  storage_key: string;
+  original_filename: string;
+  content_type: string;
+}) {
+  const signedUrl = await createSignedDocumentDownload(document.storage_key, 120);
+  const fileResponse = await fetch(signedUrl, { cache: "no-store" });
+
+  if (!fileResponse.ok) {
+    throw new Error("Could not download the stored document for OCR.");
+  }
+
+  const buffer = await fileResponse.arrayBuffer();
+  const { env } = getCloudflareContext();
+  const ai = (env as CloudflareEnv & { AI: MarkdownAI }).AI;
+
+  if (!ai) {
+    throw new Error("Cloudflare AI binding is not available.");
+  }
+
+  const result = await ai.toMarkdown({
+    name: document.original_filename,
+    blob: new Blob([buffer], {
+      type: document.content_type || "application/octet-stream",
     }),
   });
-  if (!response.ok) {
-    await admin.from("documents").update({ status: "failed", error_message: "OCR service could not accept the job." }).eq("id", document.id);
-    throw new Error(`OCR gateway rejected job: ${response.status}`);
+
+  const converted = Array.isArray(result) ? result[0] : result;
+  if (!converted) {
+    throw new Error("Cloudflare document conversion returned no result.");
   }
-  await admin.from("documents").update({ status: "processing", error_message: null }).eq("id", document.id);
+  if (converted.format === "error") {
+    throw new Error(converted.error || "Cloudflare document conversion failed.");
+  }
+
+  const markdown = converted.data?.trim();
+  if (!markdown) {
+    throw new Error("Cloudflare document conversion returned empty text.");
+  }
+
+  return markdown;
 }
