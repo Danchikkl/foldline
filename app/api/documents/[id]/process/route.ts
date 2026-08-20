@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assertSameOrigin, jsonError } from "@/lib/http";
 import { extractDocumentMarkdown } from "@/lib/ocr";
+import { extractInvoice, validateInvoice } from "@/lib/invoice";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try { assertSameOrigin(request); } catch (r) { return r as Response; }
@@ -26,8 +27,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     .select("id", { count: "exact", head: true })
     .eq("document_id", id);
 
-  // Jobs created before the Cloudflare AI pipeline was connected should not
-  // consume the retry budget. They failed because the old OCR gateway was absent.
   const legacyFailure = (doc.error_message || "").toLowerCase().includes("ocr is not connected yet")
     || (doc.error_message || "").toLowerCase().includes("processing did not start");
 
@@ -60,6 +59,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       .eq("id", job.id);
 
     const markdown = await extractDocumentMarkdown(doc);
+    const extracted = extractInvoice(markdown);
+    const validation = validateInvoice(extracted);
     const processedAt = new Date().toISOString();
 
     const { error: documentUpdateError } = await admin
@@ -67,13 +68,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       .update({
         status: "ready",
         raw_ocr_text: markdown,
+        extracted_data: extracted,
+        validation_data: validation,
         error_message: null,
         processed_at: processedAt,
       })
       .eq("id", id)
       .eq("owner_id", user.id);
 
-    if (documentUpdateError) throw new Error("Could not save extracted document text.");
+    if (documentUpdateError) throw new Error("Could not save extracted document data.");
 
     await admin
       .from("processing_jobs")
