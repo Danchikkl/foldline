@@ -5,6 +5,9 @@ import { AlertTriangle, Check, Download, Eye, EyeOff, Save, ShieldCheck, Sparkle
 import type { InvoiceData, ValidationResult } from "@/lib/invoice";
 
 type Doc = { id: string; original_filename: string; content_type: string; status: string; extracted_data: InvoiceData | null; validation_data: ValidationResult | null; error_message: string | null; updated_at: string };
+type FileResponse = { url?: string };
+type StatusResponse = { status: string; error_message?: string | null };
+type SaveResponse = { validation?: ValidationResult; error?: string };
 const labels: Record<string,string> = { supplier_name:"Supplier", supplier_bin:"BIN / IIN", invoice_number:"Invoice #", invoice_date:"Date", currency:"Currency", subtotal:"Subtotal", vat:"VAT", total:"Total" };
 const topFields = Object.keys(labels);
 
@@ -22,7 +25,7 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
   useEffect(() => {
     fetch(`/api/documents/${doc.id}/file`)
       .then((r) => r.ok ? r.json() : Promise.reject())
-      .then((x) => setFileUrl(x.url))
+      .then((x) => setFileUrl(((x as FileResponse).url) || ""))
       .catch(() => {});
   }, [doc.id]);
 
@@ -39,7 +42,7 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
       try {
         const response = await fetch(`/api/documents/${doc.id}`, { cache: "no-store" });
         if (response.ok) {
-          const current = await response.json();
+          const current = (await response.json()) as StatusResponse;
           if (stopped) return;
           if (current.status !== status) {
             setStatus(current.status);
@@ -74,8 +77,13 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
   async function save(action: "save"|"approve") {
     if (!data) return; setSaving(true); setMessage("");
     const r = await fetch(`/api/documents/${doc.id}`, { method:"PATCH", headers:{"content-type":"application/json"}, body: JSON.stringify({ extracted:data, action }) });
-    const j = await r.json();
-    if (r.ok) { setValidation(j.validation); setMessage(action === "approve" ? "Approved and audit-logged." : "Saved."); } else setMessage(j.error || "Could not save.");
+    const j = (await r.json()) as SaveResponse;
+    if (r.ok) {
+      if (j.validation) setValidation(j.validation);
+      setMessage(action === "approve" ? "Approved and audit-logged." : "Saved.");
+    } else {
+      setMessage(j.error || "Could not save.");
+    }
     setSaving(false);
   }
 
