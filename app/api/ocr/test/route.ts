@@ -3,6 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 import { createSignedDocumentDownload } from "@/lib/storage";
 import { jsonError } from "@/lib/http";
 
+type MarkdownAI = {
+  toMarkdown(input: { name: string; blob: Blob }): Promise<unknown>;
+};
+
 export async function GET(request: Request) {
   const supabase = await createClient();
   const {
@@ -32,8 +36,9 @@ export async function GET(request: Request) {
 
     const buffer = await fileResponse.arrayBuffer();
     const { env } = getCloudflareContext();
+    const ai = (env as CloudflareEnv & { AI: MarkdownAI }).AI;
 
-    const result = await env.AI.toMarkdown({
+    const result = await ai.toMarkdown({
       name: doc.original_filename,
       blob: new Blob([buffer], {
         type: doc.content_type || "application/octet-stream",
