@@ -8,6 +8,17 @@ import { createClient } from "@/lib/supabase/browser";
 
 const DOCUMENT_BUCKET = "foldline-documents";
 
+type PresignResponse = {
+  documentId: string;
+  uploadPath: string;
+  uploadToken: string;
+  error?: string;
+};
+
+type CompleteResponse = {
+  error?: string;
+};
+
 export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
   const input = useRef<HTMLInputElement>(null);
   const router = useRouter();
@@ -29,7 +40,7 @@ export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ filename: file.name, contentType: file.type, size: file.size, shipmentId }),
     });
-    const data = await presign.json();
+    const data = (await presign.json()) as PresignResponse;
     if (!presign.ok) throw new Error(data.error || `Could not prepare ${file.name}.`);
 
     setProgress(base + Math.floor(span * 0.35));
@@ -45,7 +56,7 @@ export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ documentId: data.documentId }),
     });
-    const finished = await complete.json();
+    const finished = (await complete.json()) as CompleteResponse;
     if (!complete.ok) throw new Error(finished.error || `${file.name}: upload verification failed.`);
 
     setProgress(Math.min(100, base + Math.floor(span)));
