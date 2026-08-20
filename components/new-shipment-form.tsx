@@ -3,6 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+type ShipmentCreateResponse = {
+  error?: string;
+};
+
 export function NewShipmentForm() {
   const router = useRouter();
   const [reference, setReference] = useState("");
@@ -24,7 +28,7 @@ export function NewShipmentForm() {
         body: JSON.stringify({ reference, origin, destination }),
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as ShipmentCreateResponse;
       if (!response.ok) throw new Error(data.error || "Could not create shipment.");
 
       setReference("");
