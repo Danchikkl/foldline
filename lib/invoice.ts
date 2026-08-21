@@ -28,21 +28,55 @@ function firstMatch(text: string, patterns: RegExp[], confidence: number): Evide
 
 function parseMoney(raw: string | undefined): number | null {
   if (!raw) return null;
-  const cleaned = raw.replace(/[^0-9,.-]/g, "").replace(/\s/g, "");
-  if (!cleaned) return null;
+
+  let cleaned = raw
+    .replace(/[\u00a0\s'’]/g, "")
+    .replace(/[^0-9,.-]/g, "")
+    .replace(/(?!^)-/g, "");
+
+  if (!cleaned || cleaned === "-" || !/\d/.test(cleaned)) return null;
+
+  const sign = cleaned.startsWith("-") ? -1 : 1;
+  cleaned = cleaned.replace(/^-/, "");
+
+  const commas = (cleaned.match(/,/g) || []).length;
+  const dots = (cleaned.match(/\./g) || []).length;
   const lastComma = cleaned.lastIndexOf(",");
   const lastDot = cleaned.lastIndexOf(".");
+
   let normalized = cleaned;
-  if (lastComma > lastDot) normalized = cleaned.replace(/\./g, "").replace(",", ".");
-  else normalized = cleaned.replace(/,/g, "");
-  const value = Number(normalized);
+
+  if (commas && dots) {
+    const decimalSeparator = lastComma > lastDot ? "," : ".";
+    const decimalIndex = Math.max(lastComma, lastDot);
+    const fractionDigits = cleaned.length - decimalIndex - 1;
+
+    if (fractionDigits === 1 || fractionDigits === 2) {
+      if (decimalSeparator === ",") normalized = cleaned.replace(/\./g, "").replace(/,/g, ".");
+      else normalized = cleaned.replace(/,/g, "");
+    } else {
+      normalized = cleaned.replace(/[.,]/g, "");
+    }
+  } else if (commas) {
+    const parts = cleaned.split(",");
+    const last = parts.at(-1) || "";
+    const looksLikeThousands = last.length === 3 && parts.slice(1).every((part) => part.length === 3);
+    normalized = looksLikeThousands ? parts.join("") : (last.length === 1 || last.length === 2 ? `${parts.slice(0, -1).join("")}.${last}` : parts.join(""));
+  } else if (dots) {
+    const parts = cleaned.split(".");
+    const last = parts.at(-1) || "";
+    const looksLikeThousands = last.length === 3 && parts.slice(1).every((part) => part.length === 3);
+    normalized = looksLikeThousands ? parts.join("") : (last.length === 1 || last.length === 2 ? `${parts.slice(0, -1).join("")}.${last}` : parts.join(""));
+  }
+
+  const value = Number(normalized) * sign;
   return Number.isFinite(value) ? value : null;
 }
 
 function moneyField(text: string, labels: string[], confidence: number): EvidenceValue {
   for (const label of labels) {
     const re = new RegExp(
-      `(?:${label})\\s*[:：]?\\s*(?:KZT|₸|USD|\\$|EUR|€|RUB|₽)?\\s*([0-9][0-9\\s.,-]{0,24})`,
+      `(?:${label})\\s*[:：]?\\s*(?:KZT|₸|USD|\\$|EUR|€|RUB|₽)?\\s*([0-9][0-9\\s.,'’-]{0,24})`,
       "i",
     );
     const m = text.match(re);
@@ -66,20 +100,42 @@ function detectCurrency(text: string): EvidenceValue {
   return empty();
 }
 
+function isSupplierCandidate(line: string) {
+  if (line.length < 2 || line.length > 120) return false;
+  if (!/[A-Za-zА-Яа-яЁё]/.test(line)) return false;
+  if (/\.(?:pdf|png|jpe?g|webp)$/i.test(line)) return false;
+  if (/^(?:#+\s*)?(?:invoice|сч[её]т|счет-фактура|накладная|supplier|поставщик|date|дата|bin|бин|iin|иин|buyer|покупатель|currency|валюта|description|subtotal|vat|total)\b/i.test(line)) return false;
+  if (/synthetic test document|expected foldline outcome/i.test(line)) return false;
+  if (/^\|/.test(line)) return false;
+  return true;
+}
+
 function detectSupplier(text: string): EvidenceValue {
-  const lines = text.split(/\r?\n/).map(compact).filter(Boolean).slice(0, 25);
-  const ignored = /^(invoice|сч[её]т|счет-фактура|накладная|date|дата|bin|бин|iin|иин|buyer|покупатель)/i;
-  for (const line of lines) {
-    if (
-      line.length >= 3 &&
-      line.length <= 120 &&
-      /[A-Za-zА-Яа-яЁё]/.test(line) &&
-      !ignored.test(line) &&
-      !/^\|/.test(line)
-    ) {
-      return { value: line.replace(/^#+\s*/, ""), confidence: 0.58, evidence: line };
+  const lines = text.split(/\r?\n/).map(compact).filter(Boolean).slice(0, 80);
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!/(?:^|\b)(?:supplier|поставщик)(?:\b|$)/i.test(lines[i])) continue;
+
+    const inline = lines[i].match(/(?:supplier|поставщик)(?:\s*\/\s*(?:supplier|поставщик))?\s*[:：-]\s*(.+)$/i)?.[1];
+    if (inline && isSupplierCandidate(compact(inline))) {
+      return { value: compact(inline), confidence: 0.95, evidence: lines[i] };
+    }
+
+    for (let j = i + 1; j < Math.min(lines.length, i + 5); j++) {
+      const candidate = lines[j].replace(/^#+\s*/, "");
+      if (isSupplierCandidate(candidate)) {
+        return { value: candidate, confidence: 0.92, evidence: `${lines[i]} ${candidate}` };
+      }
     }
   }
+
+  for (const line of lines.slice(0, 25)) {
+    const candidate = line.replace(/^#+\s*/, "");
+    if (isSupplierCandidate(candidate)) {
+      return { value: candidate, confidence: 0.58, evidence: line };
+    }
+  }
+
   return empty();
 }
 
@@ -112,7 +168,7 @@ function parseMarkdownTable(text: string): LineItem[] {
         quantity: qtyIdx >= 0 ? parseMoney(cells[qtyIdx]) : null,
         unit_price: unitIdx >= 0 ? parseMoney(cells[unitIdx]) : null,
         amount,
-        confidence: 0.72,
+        confidence: 0.82,
         evidence: compact(row).slice(0, 700),
       });
     }
@@ -121,18 +177,56 @@ function parseMarkdownTable(text: string): LineItem[] {
   return [];
 }
 
+function parsePlainTextLineItems(text: string): LineItem[] {
+  const lines = text.split(/\r?\n/).map(compact).filter(Boolean);
+  const items: LineItem[] = [];
+  const numeric = "-?[0-9][0-9\\s.,'’]*";
+  const rowPattern = new RegExp(`^(.+?)\\s+(${numeric})\\s+(${numeric})\\s+(${numeric})(?:\\s+(?:KZT|USD|EUR|RUB|₸|\\$|€|₽))?$`, "i");
+
+  for (const line of lines) {
+    if (/^(?:description|item|наимен|товар|subtotal|vat|total|итого|ндс)\b/i.test(line)) continue;
+    const match = line.match(rowPattern);
+    if (!match) continue;
+
+    const description = compact(match[1]);
+    const quantity = parseMoney(match[2]);
+    const unitPrice = parseMoney(match[3]);
+    const amount = parseMoney(match[4]);
+
+    if (!description || quantity === null || unitPrice === null || amount === null) continue;
+    if (!/[A-Za-zА-Яа-яЁё]/.test(description)) continue;
+
+    items.push({
+      description,
+      quantity,
+      unit_price: unitPrice,
+      amount,
+      confidence: 0.76,
+      evidence: line.slice(0, 700),
+    });
+  }
+
+  return items.slice(0, 500);
+}
+
+function parseLineItems(text: string): LineItem[] {
+  const markdownItems = parseMarkdownTable(text);
+  if (markdownItems.length) return markdownItems;
+  return parsePlainTextLineItems(text);
+}
+
 export function extractInvoice(rawText: string): InvoiceData {
   const text = norm(rawText).slice(0, 250_000);
   return {
     supplier_name: detectSupplier(text),
     supplier_bin: firstMatch(text, [/(?:БИН|BIN)\s*[:№#-]?\s*(\d{12})/i, /(?:ИИН|IIN)\s*[:№#-]?\s*(\d{12})/i], 0.97),
-    invoice_number: firstMatch(text, [/(?:invoice|сч[её]т(?:-фактура)?)\s*(?:no\.?|№|#)?\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i], 0.88),
+    invoice_number: firstMatch(text, [/(?:сч[её]т)\s*(?:no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i, /(?:invoice)\s*(?:no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i], 0.9),
     invoice_date: firstMatch(text, [/(?:date|дата)\s*[:.-]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i, /(?:date|дата)\s*[:.-]?\s*(\d{4}-\d{2}-\d{2})/i], 0.9),
     currency: detectCurrency(text),
     subtotal: moneyField(text, ["subtotal", "итого без ндс", "без ндс"], 0.84),
     vat: moneyField(text, ["vat(?:\\s*\\d{1,2}%?)?", "ндс(?:\\s*\\d{1,2}%?)?"], 0.88),
     total: moneyField(text, ["grand total", "total due", "итого к оплате", "всего к оплате", "итого", "total"], 0.92),
-    line_items: parseMarkdownTable(text),
+    line_items: parseLineItems(text),
   };
 }
 
