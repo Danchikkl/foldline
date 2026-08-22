@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assertSameOrigin, jsonError } from "@/lib/http";
 import { documentPatchSchema } from "@/lib/schemas";
-import { validateInvoice } from "@/lib/invoice";
+import { validateInvoiceForDocument } from "@/lib/invoice-history";
 
 const STALE_PROCESSING_MS = 2 * 60 * 1000;
 
@@ -59,13 +59,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return jsonError("Unauthorized", 401);
-  const { data: owned } = await supabase.from("documents").select("id,status").eq("id", id).maybeSingle();
+  const { data: owned } = await supabase
+    .from("documents")
+    .select("id,status,organization_id")
+    .eq("id", id)
+    .maybeSingle();
   if (!owned) return jsonError("Not found.", 404);
   if (!["ready", "reviewed"].includes(owned.status)) return jsonError("Document is not ready for review.", 409);
 
   const parsed = documentPatchSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return jsonError("Invalid document data.");
-  const validation = validateInvoice(parsed.data.extracted);
+  const validation = await validateInvoiceForDocument({
+    documentId: id,
+    organizationId: owned.organization_id,
+    data: parsed.data.extracted,
+  });
   const update: Record<string, unknown> = {
     extracted_data: parsed.data.extracted,
     validation_data: validation,
