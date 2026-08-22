@@ -25,6 +25,7 @@ export const invoiceDataSchema = z.object({
   supplier_name: evidenceField,
   supplier_bin: evidenceField,
   invoice_number: evidenceField,
+  po_number: evidenceField.default({ value: null, confidence: 0, evidence: "" }),
   invoice_date: evidenceField,
   currency: evidenceField,
   subtotal: evidenceField,
