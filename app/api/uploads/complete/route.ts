@@ -5,7 +5,8 @@ import { assertSameOrigin, jsonError } from "@/lib/http";
 import { deleteDocumentObject, getDocumentInfo } from "@/lib/storage";
 import { MAX_UPLOAD_BYTES } from "@/lib/constants";
 import { extractDocumentMarkdown } from "@/lib/ocr";
-import { extractInvoice, validateInvoice } from "@/lib/invoice";
+import { extractInvoice } from "@/lib/invoice";
+import { validateInvoiceForDocument } from "@/lib/invoice-history";
 
 const schema = z.object({ documentId: z.string().uuid() });
 
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
 
   const { data: doc } = await supabase
     .from("documents")
-    .select("id,storage_key,original_filename,content_type,size_bytes,status")
+    .select("id,storage_key,original_filename,content_type,size_bytes,status,organization_id")
     .eq("id", parsed.data.documentId)
     .maybeSingle();
 
@@ -86,7 +87,11 @@ export async function POST(request: Request) {
 
       const markdown = await extractDocumentMarkdown(doc);
       const extracted = extractInvoice(markdown);
-      const validation = validateInvoice(extracted);
+      const validation = await validateInvoiceForDocument({
+        documentId: doc.id,
+        organizationId: doc.organization_id,
+        data: extracted,
+      });
       const processedAt = new Date().toISOString();
 
       const { error: documentUpdateError } = await admin
