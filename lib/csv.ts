@@ -8,7 +8,7 @@ function safeCell(value: unknown) {
 
 export function invoiceCsv(data: InvoiceData) {
   const rows: string[][] = [
-    ["supplier_name", "supplier_bin", "invoice_number", "invoice_date", "currency", "description", "quantity", "unit_price", "amount", "subtotal", "vat", "total"],
+    ["supplier_name", "supplier_bin", "invoice_number", "po_number", "invoice_date", "currency", "description", "quantity", "unit_price", "amount", "subtotal", "vat", "total"],
   ];
   const items = data.line_items.length
     ? data.line_items
@@ -19,6 +19,7 @@ export function invoiceCsv(data: InvoiceData) {
       data.supplier_name.value,
       data.supplier_bin.value,
       data.invoice_number.value,
+      data.po_number.value,
       data.invoice_date.value,
       data.currency.value,
       item.description,
