@@ -2,7 +2,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assertSameOrigin, jsonError } from "@/lib/http";
 import { extractDocumentMarkdown } from "@/lib/ocr";
-import { extractInvoice, validateInvoice } from "@/lib/invoice";
+import { extractInvoice } from "@/lib/invoice";
+import { validateInvoiceForDocument } from "@/lib/invoice-history";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try { assertSameOrigin(request); } catch (r) { return r as Response; }
@@ -13,7 +14,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const { data: doc } = await supabase
     .from("documents")
-    .select("id,storage_key,original_filename,content_type,status,error_message")
+    .select("id,storage_key,original_filename,content_type,status,error_message,organization_id")
     .eq("id", id)
     .maybeSingle();
   if (!doc) return jsonError("Not found", 404);
@@ -60,7 +61,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     const markdown = await extractDocumentMarkdown(doc);
     const extracted = extractInvoice(markdown);
-    const validation = validateInvoice(extracted);
+    const validation = await validateInvoiceForDocument({
+      documentId: id,
+      organizationId: doc.organization_id,
+      data: extracted,
+    });
     const processedAt = new Date().toISOString();
 
     const { error: documentUpdateError } = await admin
