@@ -8,7 +8,7 @@ type Doc = { id: string; original_filename: string; content_type: string; status
 type FileResponse = { url?: string };
 type StatusResponse = { status: string; error_message?: string | null };
 type SaveResponse = { validation?: ValidationResult; error?: string };
-const labels: Record<string,string> = { supplier_name:"Supplier", supplier_bin:"BIN / IIN", invoice_number:"Invoice #", invoice_date:"Date", currency:"Currency", subtotal:"Subtotal", vat:"VAT", total:"Total" };
+const labels: Record<string,string> = { supplier_name:"Supplier", supplier_bin:"BIN / IIN", invoice_number:"Invoice #", po_number:"PO #", invoice_date:"Date", currency:"Currency", subtotal:"Subtotal", vat:"VAT", total:"Total" };
 const topFields = Object.keys(labels);
 
 export function DocumentReview({ document: doc }: { document: Doc }) {
