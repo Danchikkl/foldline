@@ -4,6 +4,7 @@ export type InvoiceData = {
   supplier_name: EvidenceValue;
   supplier_bin: EvidenceValue;
   invoice_number: EvidenceValue;
+  po_number: EvidenceValue;
   invoice_date: EvidenceValue;
   currency: EvidenceValue;
   subtotal: EvidenceValue;
@@ -13,6 +14,13 @@ export type InvoiceData = {
 };
 export type ValidationCheck = { id: string; label: string; status: "pass" | "warn" | "fail"; message: string; fields: string[] };
 export type ValidationResult = { risk_score: number; checks: ValidationCheck[]; needs_review: string[] };
+export type InvoiceValidationContext = {
+  duplicateInvoice?: {
+    documentId: string;
+    filename: string;
+    invoiceNumber: string;
+  } | null;
+};
 
 const empty = (): EvidenceValue => ({ value: null, confidence: 0, evidence: "" });
 const compact = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -221,6 +229,10 @@ export function extractInvoice(rawText: string): InvoiceData {
     supplier_name: detectSupplier(text),
     supplier_bin: firstMatch(text, [/(?:БИН|BIN)\s*[:№#-]?\s*(\d{12})/i, /(?:ИИН|IIN)\s*[:№#-]?\s*(\d{12})/i], 0.97),
     invoice_number: firstMatch(text, [/(?:сч[её]т)\s*(?:no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i, /(?:invoice)\s*(?:no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i], 0.9),
+    po_number: firstMatch(text, [
+      /(?:purchase\s+order|p\.?\s*o\.?|po)\s*(?:number|no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i,
+      /(?:purchase\s+order|p\.?\s*o\.?|po)\s*[:.-]\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i,
+    ], 0.9),
     invoice_date: firstMatch(text, [/(?:date|дата)\s*[:.-]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i, /(?:date|дата)\s*[:.-]?\s*(\d{4}-\d{2}-\d{2})/i], 0.9),
     currency: detectCurrency(text),
     subtotal: moneyField(text, ["subtotal", "итого без ндс", "без ндс"], 0.84),
@@ -233,7 +245,7 @@ export function extractInvoice(rawText: string): InvoiceData {
 const num = (v: EvidenceValue) => (typeof v.value === "number" ? v.value : null);
 const close = (a: number, b: number) => Math.abs(a - b) <= Math.max(1, Math.abs(b) * 0.01);
 
-export function validateInvoice(data: InvoiceData): ValidationResult {
+export function validateInvoice(data: InvoiceData, context: InvoiceValidationContext = {}): ValidationResult {
   const checks: ValidationCheck[] = [];
   const needs = new Set<string>();
   const add = (c: ValidationCheck) => {
@@ -259,6 +271,32 @@ export function validateInvoice(data: InvoiceData): ValidationResult {
       ? { id: "invoice-number", label: "Invoice number", status: "pass", message: "Invoice number detected.", fields: [] }
       : { id: "invoice-number", label: "Invoice number", status: "warn", message: "Invoice number needs review.", fields: ["invoice_number"] },
   );
+
+  add(
+    data.po_number.value
+      ? { id: "po-number", label: "PO reference", status: "pass", message: "PO number detected.", fields: [] }
+      : { id: "po-number", label: "PO reference", status: "warn", message: "PO number was not detected. Confirm whether this invoice requires a PO reference.", fields: ["po_number"] },
+  );
+
+  if (context.duplicateInvoice !== undefined && data.invoice_number.value) {
+    add(
+      context.duplicateInvoice
+        ? {
+            id: "duplicate-invoice-number",
+            label: "Duplicate invoice number",
+            status: "fail",
+            message: `Invoice #${String(data.invoice_number.value)} already appears in ${context.duplicateInvoice.filename}.`,
+            fields: ["invoice_number"],
+          }
+        : {
+            id: "duplicate-invoice-number",
+            label: "Duplicate invoice number",
+            status: "pass",
+            message: "No matching invoice number was found in this workspace.",
+            fields: [],
+          },
+    );
+  }
 
   const total = num(data.total);
   const subtotal = num(data.subtotal);
@@ -302,6 +340,7 @@ export function validateInvoice(data: InvoiceData): ValidationResult {
     ["total", data.total],
   ];
   for (const [name, field] of confidenceFields) if (field.confidence < 0.75) needs.add(name);
+  if (data.po_number.value && data.po_number.confidence < 0.75) needs.add("po_number");
 
   const failCount = checks.filter((c) => c.status === "fail").length;
   const warnCount = checks.filter((c) => c.status === "warn").length;
