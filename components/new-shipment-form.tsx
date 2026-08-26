@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 type ShipmentCreateResponse = {
   error?: string;
+  shipment?: { id: string };
 };
 
 export function NewShipmentForm() {
@@ -29,15 +30,12 @@ export function NewShipmentForm() {
       });
 
       const data = (await response.json()) as ShipmentCreateResponse;
-      if (!response.ok) throw new Error(data.error || "Could not create shipment.");
+      if (!response.ok) throw new Error(data.error || "Could not create review.");
+      if (!data.shipment?.id) throw new Error("Review was created but could not be opened.");
 
-      setReference("");
-      setOrigin("");
-      setDestination("");
-      router.refresh();
+      router.push(`/shipments/${data.shipment.id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not create shipment.");
-    } finally {
+      setError(e instanceof Error ? e.message : "Could not create review.");
       setBusy(false);
     }
   }
@@ -45,17 +43,17 @@ export function NewShipmentForm() {
   return (
     <form className="authForm" onSubmit={submit}>
       <label>
-        Shipment reference
+        Review reference
         <input
           value={reference}
           onChange={(e) => setReference(e.target.value)}
-          placeholder="KZ-00482"
+          placeholder="INV-2048 or KZ-00482"
           maxLength={120}
           required
         />
       </label>
       <label>
-        Origin
+        Origin <span aria-hidden="true">(optional)</span>
         <input
           value={origin}
           onChange={(e) => setOrigin(e.target.value)}
@@ -64,7 +62,7 @@ export function NewShipmentForm() {
         />
       </label>
       <label>
-        Destination
+        Destination <span aria-hidden="true">(optional)</span>
         <input
           value={destination}
           onChange={(e) => setDestination(e.target.value)}
@@ -74,7 +72,7 @@ export function NewShipmentForm() {
       </label>
       {error && <div className="formError" role="alert">{error}</div>}
       <button className="button buttonAccent buttonWide" disabled={busy}>
-        {busy ? "Creating…" : "+ New shipment"}
+        {busy ? "Opening…" : "Start review"}
       </button>
     </form>
   );
