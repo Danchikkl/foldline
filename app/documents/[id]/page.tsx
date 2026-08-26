@@ -15,9 +15,17 @@ function needsParserRefresh(document: any) {
 
   const supplier = document.extracted_data?.supplier_name?.value;
   if (typeof supplier === "string" && /\.(?:pdf|png|jpe?g|webp)$/i.test(supplier.trim())) return true;
+  if (typeof supplier === "string" && /^(?:metadata|details?|document|field|value)$/i.test(supplier.trim())) return true;
+
+  const raw = String(document.raw_ocr_text || "");
+  const invoiceNumber = document.extracted_data?.invoice_number?.value;
+  if (!invoiceNumber && /invoice\s+number/i.test(raw)) return true;
+
+  const subtotal = document.extracted_data?.subtotal?.value;
+  const total = document.extracted_data?.total?.value;
+  if (typeof subtotal === "number" && typeof total === "number" && subtotal === total && /(?:^|\n)\s*total\s*[:|]/im.test(raw)) return true;
 
   const lineItems = document.extracted_data?.line_items;
-  const raw = String(document.raw_ocr_text || "");
   if (Array.isArray(lineItems) && lineItems.length === 0 && /description\s+qty\s+unit\s+price\s+amount/i.test(raw)) return true;
 
   return false;
