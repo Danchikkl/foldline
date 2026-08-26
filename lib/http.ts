@@ -1,13 +1,18 @@
-import { env } from "@/lib/env";
-
 export function assertSameOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  if (!origin) throw new Response("Forbidden", { status: 403 });
+  if (!origin) {
+    throw Response.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   try {
-    const expected = new URL(env.appUrl()).origin;
-    if (new URL(origin).origin !== expected) throw new Error("origin mismatch");
+    const requestOrigin = new URL(request.url).origin;
+    const browserOrigin = new URL(origin).origin;
+
+    if (browserOrigin !== requestOrigin) {
+      throw new Error("origin mismatch");
+    }
   } catch {
-    throw new Response("Forbidden", { status: 403 });
+    throw Response.json({ error: "Forbidden" }, { status: 403 });
   }
 }
 
