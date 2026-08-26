@@ -32,6 +32,21 @@ VAT: 13,500 KZT
 TOTAL: 126,000 KZT
 `;
 
+// Mirrors the real Cloudflare toMarkdown failure seen in production: adjacent
+// PDF cells can arrive without separators even though the source PDF is clean.
+const collapsedCleanInvoice = `
+INVOICE
+Synthetic test document for Foldline - no real company or transaction
+SUPPLIERQazaq Office Supply LLP
+BIN / IIN123456789012
+INVOICE NUMBERKZ-2026-0813DATE13.08.2026
+CUSTOMERNorth Steppe LabsCURRENCYKZT
+DescriptionQtyUnit priceAmount
+Laboratory notebooks103,50035,000Nitrile gloves, boxes152,50037,500Pipette tip racks85,00040,000Subtotal112,500 KZT
+VAT13,500 KZT
+TOTAL126,000 KZT
+`;
+
 const mismatchInvoice = `
 INVOICE
 SUPPLIER
@@ -83,6 +98,12 @@ export function runInvoiceReliabilityFixtures(): FixtureResult[] {
       cleanInvoice,
       (result) => result.extraction.status === "reliable" && result.risk_level === "low",
       "A complete internally consistent invoice must be low risk.",
+    ),
+    run(
+      "Collapsed converter output",
+      collapsedCleanInvoice,
+      (result) => result.extraction.status === "reliable" && result.risk_level === "low",
+      "A clean invoice must remain verifiable when document conversion glues adjacent PDF cells together.",
     ),
     run(
       "Totals mismatch",
