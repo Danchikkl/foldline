@@ -4,37 +4,17 @@ import { AlertTriangle, ArrowRight, Clock3, PackageCheck, ShieldCheck } from "lu
 import { requireUser } from "@/lib/auth";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { NewShipmentForm } from "@/components/new-shipment-form";
-import { PLAN_LIMITS } from "@/lib/constants";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 export default async function Dashboard() {
   const { user, supabase } = await requireUser();
 
-  const [{ data: shipments }, { data: subscription }] = await Promise.all([
-    supabase
-      .from("shipments")
-      .select("id,reference,origin,destination,status,risk_score,created_at")
-      .order("created_at", { ascending: false })
-      .limit(50),
-    supabase
-      .from("subscriptions")
-      .select("plan,status")
-      .eq("user_id", user.id)
-      .maybeSingle(),
-  ]);
-
-  const start = new Date();
-  start.setUTCDate(1);
-  start.setUTCHours(0, 0, 0, 0);
-
-  const { count } = await supabase
-    .from("documents")
-    .select("id", { count: "exact", head: true })
-    .gte("created_at", start.toISOString());
-
-  const plan = (subscription?.plan === "pro" ? "pro" : "free") as "free" | "pro";
-  const limit = PLAN_LIMITS[plan];
+  const { data: shipments } = await supabase
+    .from("shipments")
+    .select("id,reference,origin,destination,status,risk_score,created_at")
+    .order("created_at", { ascending: false })
+    .limit(50);
 
   return (
     <DashboardShell email={user.email || "account"}>
@@ -45,7 +25,7 @@ export default async function Dashboard() {
             <h1>Review an invoice before a small error becomes a real problem.</h1>
           </div>
           <Link href="/settings/billing" className="planBadge">
-            {plan === "pro" ? "Pro" : "Free"} · {count ?? 0}/{limit} documents this month
+            Reserve early access
           </Link>
         </header>
 
