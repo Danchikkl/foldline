@@ -2,38 +2,21 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { type InvoiceData } from "@/lib/invoice";
-import { extractInvoice } from "@/lib/invoice-v2";
+import type { InvoiceData } from "@/lib/invoice";
+import {
+  analyzeInvoice,
+  INVOICE_ENGINE_VERSION,
+  type ValidationResult,
+} from "@/lib/invoice-engine";
 import { validateInvoiceForDocument } from "@/lib/invoice-history";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { DocumentReview } from "@/components/document-review";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
-function needsParserRefresh(document: any) {
-  if (!document.extracted_data) return true;
-  if (!("po_number" in document.extracted_data)) return true;
-
-  const supplier = document.extracted_data?.supplier_name?.value;
-  if (typeof supplier === "string" && /\.(?:pdf|png|jpe?g|webp)$/i.test(supplier.trim())) return true;
-  if (typeof supplier === "string" && /^(?:metadata|details?|document|field|value)$/i.test(supplier.trim())) return true;
-  if (typeof supplier === "string" && /PDFFormatVersion|AcroForm|XFA/i.test(supplier)) return true;
-
-  const raw = String(document.raw_ocr_text || "");
-  const invoiceNumber = document.extracted_data?.invoice_number?.value;
-  if (!invoiceNumber && /invoice\s+number/i.test(raw)) return true;
-
-  const subtotal = document.extracted_data?.subtotal?.value;
-  const vat = document.extracted_data?.vat?.value;
-  const total = document.extracted_data?.total?.value;
-  if ((subtotal == null || total == null || vat == null) && /subtotal/i.test(raw) && /\btotal\b/i.test(raw)) return true;
-  if (typeof vat === "number" && vat > 100000000 && /\bvat\b/i.test(raw)) return true;
-  if (typeof subtotal === "number" && typeof total === "number" && subtotal === total && /(?:^|\n)\s*total\s*[:|]/im.test(raw)) return true;
-
-  const lineItems = document.extracted_data?.line_items;
-  if (Array.isArray(lineItems) && lineItems.length < 3 && /description\s+qty\s+unit\s+price\s+amount/i.test(raw)) return true;
-
-  return false;
+function needsEngineRefresh(validation: unknown) {
+  if (!validation || typeof validation !== "object") return true;
+  return (validation as { engine_version?: unknown }).engine_version !== INVOICE_ENGINE_VERSION;
 }
 
 export default async function DocumentPage({ params }: { params: Promise<{ id: string }> }) {
@@ -48,19 +31,20 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
   if (!data) notFound();
 
   let document = data;
-  const readyForValidation = document.raw_ocr_text && ["ready", "reviewed"].includes(document.status);
+  const readyForValidation = Boolean(document.raw_ocr_text) && ["ready", "reviewed"].includes(document.status);
 
-  if (readyForValidation && needsParserRefresh(document)) {
-    const extracted = extractInvoice(document.raw_ocr_text || "");
+  if (readyForValidation && needsEngineRefresh(document.validation_data)) {
+    const analysis = analyzeInvoice(document.raw_ocr_text || "");
     const validation = await validateInvoiceForDocument({
       documentId: id,
       organizationId: document.organization_id,
-      data: extracted,
+      data: analysis.data,
+      extraction: analysis.extraction,
     });
 
     document = {
       ...document,
-      extracted_data: extracted,
+      extracted_data: analysis.data,
       validation_data: validation,
     };
 
@@ -68,17 +52,20 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
       const admin = createAdminClient();
       await admin
         .from("documents")
-        .update({ extracted_data: extracted, validation_data: validation })
+        .update({ extracted_data: analysis.data, validation_data: validation })
         .eq("id", id)
         .eq("owner_id", user.id);
     } catch (error) {
-      console.warn("Could not persist refreshed structured OCR data", { documentId: id, error });
+      console.warn("Could not persist refreshed document analysis", { documentId: id, error });
     }
   } else if (readyForValidation && document.extracted_data) {
+    const existingValidation = document.validation_data as ValidationResult | null;
     const validation = await validateInvoiceForDocument({
       documentId: id,
       organizationId: document.organization_id,
       data: document.extracted_data as unknown as InvoiceData,
+      extraction: existingValidation?.extraction,
+      humanConfirmed: document.status === "reviewed",
     });
     document = { ...document, validation_data: validation };
   }
