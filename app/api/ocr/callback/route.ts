@@ -1,8 +1,10 @@
-import { createAdminClient } from "@/lib/supabase/admin";
-import { env } from "@/lib/env";
-import { hmacHex, timingSafeEqualHex } from "@/lib/security";
-import { extractInvoice, validateInvoice } from "@/lib/invoice";
-import { jsonError } from "@/lib/http";
-
-type Callback={document_id:string;status:"completed"|"failed";raw_text?:string;error?:string};
-export async function POST(request:Request){const body=await request.text();const timestamp=request.headers.get("x-foldline-timestamp")||"";const signature=request.headers.get("x-foldline-signature")||"";const now=Math.floor(Date.now()/1000);const ts=Number(timestamp);if(!Number.isFinite(ts)||Math.abs(now-ts)>300)return jsonError("Stale callback.",401);const expected=await hmacHex(env.ocrCallbackSecret(),`${timestamp}.${body}`);if(!timingSafeEqualHex(expected,signature))return jsonError("Invalid signature.",401);let payload:Callback;try{payload=JSON.parse(body)}catch{return jsonError("Invalid JSON.")}if(!/^[0-9a-f-]{36}$/i.test(payload.document_id))return jsonError("Invalid document id.");const admin=createAdminClient();if(payload.status==="failed"){await admin.from("documents").update({status:"failed",error_message:String(payload.error||"OCR failed").slice(0,500)}).eq("id",payload.document_id);await admin.from("processing_jobs").update({status:"failed",finished_at:new Date().toISOString()}).eq("document_id",payload.document_id).in("status",["queued","processing"]);return Response.json({ok:true})}const raw=(payload.raw_text||"").slice(0,250000);const extracted=extractInvoice(raw);const validation=validateInvoice(extracted);await admin.from("documents").update({status:"ready",raw_ocr_text:raw,extracted_data:extracted,validation_data:validation,processed_at:new Date().toISOString(),error_message:null}).eq("id",payload.document_id);await admin.from("processing_jobs").update({status:"completed",finished_at:new Date().toISOString()}).eq("document_id",payload.document_id).in("status",["queued","processing"]);return Response.json({ok:true})}
+// Legacy external OCR callback retired.
+// Foldline now performs document conversion and reliability-gated analysis
+// inside the authenticated upload/retry pipeline. Keeping the old callback
+// writable could let stale parser logic overwrite current analysis results.
+export async function POST() {
+  return Response.json(
+    { error: "This OCR callback is retired." },
+    { status: 410, headers: { "cache-control": "no-store" } },
+  );
+}
