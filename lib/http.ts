@@ -5,11 +5,19 @@ export function assertSameOrigin(request: Request) {
   }
 
   try {
-    const requestOrigin = new URL(request.url).origin;
-    const browserOrigin = new URL(origin).origin;
+    const browserOrigin = new URL(origin);
+    const forwardedHost = request.headers.get("x-forwarded-host");
+    const host = forwardedHost || request.headers.get("host");
 
-    if (browserOrigin !== requestOrigin) {
-      throw new Error("origin mismatch");
+    if (!host) throw new Error("missing host");
+
+    const browserHost = browserOrigin.host.toLowerCase();
+    const requestHost = host.toLowerCase();
+    if (browserHost !== requestHost) throw new Error("origin mismatch");
+
+    const fetchSite = request.headers.get("sec-fetch-site");
+    if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "same-site") {
+      throw new Error("cross-site request");
     }
   } catch {
     throw Response.json({ error: "Forbidden" }, { status: 403 });
