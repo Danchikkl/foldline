@@ -26,7 +26,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
 
   if (isInFlight && isStale) {
     const admin = createAdminClient();
-    const message = "Upload completed, but processing did not start. OCR is not connected yet.";
+    const message = "Document processing timed out. Retry processing or upload the document again.";
 
     await admin
       .from("documents")
@@ -69,29 +69,46 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const parsed = documentPatchSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return jsonError("Invalid document data.");
+
+  const humanConfirmed = parsed.data.action === "approve";
   const validation = await validateInvoiceForDocument({
     documentId: id,
     organizationId: owned.organization_id,
     data: parsed.data.extracted,
+    humanConfirmed,
   });
+
   const update: Record<string, unknown> = {
     extracted_data: parsed.data.extracted,
     validation_data: validation,
     updated_at: new Date().toISOString(),
   };
-  if (parsed.data.action === "approve") {
+  if (humanConfirmed) {
     update.status = "reviewed";
     update.reviewed_at = new Date().toISOString();
   }
 
   const admin = createAdminClient();
-  const { data, error } = await admin.from("documents").update(update).eq("id", id).eq("owner_id", user.id).select("id").maybeSingle();
+  const { data, error } = await admin
+    .from("documents")
+    .update(update)
+    .eq("id", id)
+    .eq("owner_id", user.id)
+    .select("id")
+    .maybeSingle();
   if (error || !data) return jsonError("Not found or not permitted.", 404);
+
   await admin.from("audit_events").insert({
     user_id: user.id,
     document_id: id,
-    event_type: parsed.data.action === "approve" ? "document.approved" : "document.edited",
-    metadata: { risk_score: validation.risk_score },
+    event_type: humanConfirmed ? "document.approved" : "document.edited",
+    metadata: {
+      risk_score: validation.risk_score,
+      risk_level: validation.risk_level,
+      extraction_status: validation.extraction.status,
+      engine_version: validation.engine_version,
+    },
   });
+
   return Response.json({ ok: true, validation });
 }
