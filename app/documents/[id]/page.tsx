@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { extractInvoice, type InvoiceData } from "@/lib/invoice";
+import { type InvoiceData } from "@/lib/invoice";
+import { extractInvoice } from "@/lib/invoice-v2";
 import { validateInvoiceForDocument } from "@/lib/invoice-history";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { DocumentReview } from "@/components/document-review";
@@ -16,17 +17,21 @@ function needsParserRefresh(document: any) {
   const supplier = document.extracted_data?.supplier_name?.value;
   if (typeof supplier === "string" && /\.(?:pdf|png|jpe?g|webp)$/i.test(supplier.trim())) return true;
   if (typeof supplier === "string" && /^(?:metadata|details?|document|field|value)$/i.test(supplier.trim())) return true;
+  if (typeof supplier === "string" && /PDFFormatVersion|AcroForm|XFA/i.test(supplier)) return true;
 
   const raw = String(document.raw_ocr_text || "");
   const invoiceNumber = document.extracted_data?.invoice_number?.value;
   if (!invoiceNumber && /invoice\s+number/i.test(raw)) return true;
 
   const subtotal = document.extracted_data?.subtotal?.value;
+  const vat = document.extracted_data?.vat?.value;
   const total = document.extracted_data?.total?.value;
+  if ((subtotal == null || total == null || vat == null) && /subtotal/i.test(raw) && /\btotal\b/i.test(raw)) return true;
+  if (typeof vat === "number" && vat > 100000000 && /\bvat\b/i.test(raw)) return true;
   if (typeof subtotal === "number" && typeof total === "number" && subtotal === total && /(?:^|\n)\s*total\s*[:|]/im.test(raw)) return true;
 
   const lineItems = document.extracted_data?.line_items;
-  if (Array.isArray(lineItems) && lineItems.length === 0 && /description\s+qty\s+unit\s+price\s+amount/i.test(raw)) return true;
+  if (Array.isArray(lineItems) && lineItems.length < 3 && /description\s+qty\s+unit\s+price\s+amount/i.test(raw)) return true;
 
   return false;
 }
