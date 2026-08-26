@@ -1,70 +1,125 @@
-# Foldline — Document Workflow MVP
+# Foldline — Reliability-gated invoice review MVP
 
-A production-minded MVP for **Document → Structured Data → Proofline Review → CSV**.
+Foldline is an early B2B document-review product. The current reliable product scope is intentionally narrow:
 
-## Product idea
-Foldline is deliberately not positioned as “another OCR API”. The differentiator in this MVP is **Proofline**:
-- evidence attached to extracted values;
-- deterministic integrity checks (`subtotal + VAT ≈ total`, line-item reconciliation, BIN/IIN format);
-- **Review by Exception**, so users see suspicious fields first;
-- an append-only-ish server-written audit event for edits/approval.
+**Invoice → extraction → reliability gate → deterministic checks → human review → export**
 
-MonkeyOCRv2 is an external parsing engine. The web app does not claim the model as proprietary technology.
+Broader cross-document reconciliation (invoice ↔ packing list ↔ PO ↔ transport documents) remains a product direction, not a finished claim.
+
+## Core rule
+
+**Extraction uncertainty is not business risk.**
+
+Foldline must never turn a weak parse into a scary percentage. The review engine therefore separates:
+
+1. **Extraction quality** — did we read the invoice reliably enough?
+2. **Business checks** — do values that were actually read disagree?
+3. **Human confirmation** — can a person correct/confirm uncertain fields against the original?
+
+Possible document states are:
+- `reliable` → verified checks may produce Low / Needs attention / High;
+- `needs_review` → risk is not calculated;
+- `unsupported` → no invoice claim is made;
+- processing failure → explicit retry state.
+
+## What the current invoice engine checks
+
+When the required extraction is reliable enough:
+- supplier identity and invoice number presence;
+- BIN/IIN format when a Kazakhstan BIN/IIN is actually present;
+- `subtotal + VAT ≈ total` when all required values are available;
+- line-item `quantity × unit price ≈ amount`;
+- line-item sum against subtotal/total;
+- duplicate invoice number **only together with the same supplier identity**.
+
+A missing PO is informational by default. It is not a business error unless a future workspace rule explicitly requires one.
+
+## Parsing strategy
+
+Cloudflare document conversion can return different Markdown/text layouts for the same kind of PDF. Foldline therefore does not trust one fragile regex path:
+
+- `lib/invoice.ts` — legacy/table-oriented extraction strategy;
+- `lib/invoice-v2.ts` — semantic/flattened-text extraction strategy;
+- `lib/invoice-engine.ts` — reconciles candidate fields and structural signals;
+- `lib/invoice-reliability.ts` — conservative production gate that decides whether a business-risk claim is allowed.
+
+The engine rejects obvious PDF metadata, checks line-item arithmetic, uses internal consistency to resolve benign parser disagreement, and withholds risk when disagreement cannot be resolved safely.
+
+## Regression fixtures
+
+`lib/invoice-reliability-fixtures.ts` contains deterministic cases for:
+- clean valid invoice → reliable / low;
+- arithmetic mismatch → verified high-severity exception;
+- unrelated document → unsupported / no risk;
+- PDF-metadata/flattened extraction noise → never medium/high risk from extraction noise alone.
+
+The founder-only `/admin` page renders these self-tests so regressions are visible before a pilot.
 
 ## Stack
-- Next.js 16 / React 19
+
+- Next.js 16 / React 19 / TypeScript
 - Cloudflare Workers via OpenNext
+- Cloudflare Workers AI `AI.toMarkdown()` for managed document conversion
 - Supabase Auth + Postgres + RLS
-- Cloudflare R2 private object storage
-- Stripe-hosted Checkout + Billing Portal
-- Separate FastAPI OCR gateway → official MonkeyOCRv2 FastAPI `/parse`
+- Supabase private Storage with signed upload/download URLs
+- server-side reliability/validation engine
 
-## Setup
-1. Create Supabase project and run `supabase/migrations/001_init.sql`.
-2. Enable email confirmation in Supabase Auth. Set your Site URL and callback URL (`/auth/callback`).
-3. Create a **private** R2 bucket. Configure CORS to allow only your app origin and `PUT, GET, HEAD` with `Content-Type`.
-4. Create an R2 API token scoped only to that bucket.
-5. Create a Stripe product/recurring monthly price and copy its `price_...` id.
-6. Register `https://YOUR_APP/api/stripe/webhook` and subscribe at minimum to `checkout.session.completed` and `customer.subscription.*`.
-7. Deploy MonkeyOCRv2 using its official parsing service, then deploy `services/ocr-gateway` next to it. Keep the MonkeyOCR FastAPI private/network-restricted where possible.
-8. Copy `.env.example` to `.env.local` and fill values.
-9. Install and run: `npm install && npm run dev`. Commit the generated `package-lock.json` before production.
-10. For local Workers preview, copy `.dev.vars.example` to `.dev.vars`. Production secrets should be configured as Cloudflare secrets/bindings, not committed files.
-11. Production preview: `npm run preview`; deploy: `npm run deploy`.
+Stripe billing and the old external OCR/R2 callback path are intentionally retired during the pilot/preorder stage.
 
-## R2 CORS example
-```json
-[
-  {
-    "AllowedOrigins": ["https://YOUR_APP_DOMAIN"],
-    "AllowedMethods": ["PUT", "GET", "HEAD"],
-    "AllowedHeaders": ["Content-Type"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 3600
-  }
-]
-```
+## Local setup
 
-## MonkeyOCRv2 runtime
-The official repository currently documents Python 3.11 and a vLLM parsing service. Start the official service first, for example (paths depend on your GPU host):
-```bash
-cd parsing
-python serve.py -m ../model_weight/MonkeyOCRv2-B-Parsing -p 8888
-python fastapi/main.py -s http://127.0.0.1:8888 -p 8000
-```
-Then point `MONKEYOCR_API_URL=http://127.0.0.1:8000` at it.
+1. Install dependencies:
+   ```bash
+   npm install
+   ```
+2. Copy `.env.example` to `.env.local` and fill the active Supabase/public values.
+3. Link the Supabase project and apply migrations:
+   ```bash
+   npx supabase db push
+   ```
+4. Run locally:
+   ```bash
+   npm run dev
+   ```
+5. Before pushing changes:
+   ```bash
+   npm run typecheck
+   npm run build
+   ```
 
-## Security defaults included
-See `SECURITY.md`. Important: app-level controls do **not** replace Cloudflare WAF/rate-limit rules, provider patching, backups, secrets rotation or a real security review before handling sensitive production documents.
+For Cloudflare, the `AI` binding is configured in `wrangler.jsonc`. Production secrets belong in Cloudflare/Supabase configuration, never in committed files.
 
-## Before taking money
-- Replace draft privacy/terms pages with jurisdiction-specific legal docs.
-- Verify Stripe account/entity eligibility and who is legally permitted to operate the payment account.
-- Add invoice receipts/tax configuration appropriate to your operating entity.
-- Run dependency audit/SCA after `npm install` and pin a lockfile.
+## CI
 
-## Launch-readiness additions
+`.github/workflows/ci.yml` runs on pushes and pull requests:
+- TypeScript typecheck;
+- Next.js build;
+- production dependency audit at high severity;
+- legacy gateway security tests while that directory remains in the repository.
 
-The public site now includes a branded 404, above-the-fold CTA, internal navigation, signup/payment thank-you flow, breadcrumbs, FAQ, mobile sticky CTA, `robots.txt`, `sitemap.xml`, unique metadata, generated Open Graph imagery, SoftwareApplication schema microdata, an optional GA4 integration, public Security page, transparent case-study policy and improved MVP privacy/terms notices.
+A green CI build is required before treating a code change as deployable.
 
-See `LAUNCH_CHECKLIST.md` for the exact mapping of the 20-point launch checklist. Foldline intentionally does **not** fabricate reviews, case-study results, a physical address/map, performance promises, or team photos.
+## Security defaults
+
+See `SECURITY.md`. Current important controls include:
+- private Supabase Storage;
+- short-lived signed file URLs;
+- authenticated/RLS-scoped document access;
+- server-only service-role access;
+- same-origin checks on state-changing routes;
+- strict upload type/size checks;
+- founder-only admin route keyed to one Supabase Auth UUID;
+- public diagnostics minimized; OCR/debug diagnostics restricted to founder admin;
+- old writable OCR callback and live billing endpoints retired.
+
+These controls reduce risk but are not a substitute for an independent security/legal review before handling sensitive production documents at scale.
+
+## Pilot rule
+
+Do not market a workflow as reliable merely because a parser returned values. Before sending a build to pilot users:
+- CI must be green;
+- reliability fixtures must pass;
+- a clean invoice must not produce a false business exception;
+- a known mismatch must be caught;
+- an unsupported/non-invoice document must receive no invented invoice risk;
+- uncertain extraction must stop at `Needs review` until a person confirms it.
