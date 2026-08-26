@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assertSameOrigin, jsonError } from "@/lib/http";
 import { extractDocumentMarkdown } from "@/lib/ocr";
-import { extractInvoice } from "@/lib/invoice";
+import { extractInvoice } from "@/lib/invoice-v2";
 import { validateInvoiceForDocument } from "@/lib/invoice-history";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
