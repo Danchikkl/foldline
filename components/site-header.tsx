@@ -24,6 +24,7 @@ export async function SiteHeader() {
           <Link href="/use-cases">Use cases</Link>
           <Link href="/security">Security</Link>
           <Link href="/pricing">Pricing</Link>
+          <Link href="/contact">Contact</Link>
         </nav>
         <div className="headerActions">
           {signedIn ? (
