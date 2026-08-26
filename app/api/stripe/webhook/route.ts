@@ -1,6 +1,8 @@
-import Stripe from "stripe";
-import { stripeClient } from "@/lib/stripe";
-import { env } from "@/lib/env";
-import { createAdminClient } from "@/lib/supabase/admin";
-
-export async function POST(request:Request){const signature=request.headers.get("stripe-signature");if(!signature)return new Response("Missing signature",{status:400});const raw=await request.text();const stripe=stripeClient();let event:Stripe.Event;try{event=await stripe.webhooks.constructEventAsync(raw,signature,env.stripeWebhookSecret(),300,Stripe.createSubtleCryptoProvider())}catch{return new Response("Invalid signature",{status:400})}const admin=createAdminClient();const{error:seenError}=await admin.from("stripe_events").insert({id:event.id,event_type:event.type});if(seenError?.code==="23505")return Response.json({received:true,duplicate:true});if(seenError)return new Response("Event persistence failed",{status:500});try{if(event.type.startsWith("customer.subscription.")){const sub=event.data.object as Stripe.Subscription;const customerId=typeof sub.customer==="string"?sub.customer:sub.customer.id;let userId=sub.metadata?.user_id||null;if(!userId){const{data}=await admin.from("subscriptions").select("user_id").eq("stripe_customer_id",customerId).maybeSingle();userId=data?.user_id||null}if(userId){const active=["active","trialing"].includes(sub.status);const periodEnd=(sub as any).current_period_end;await admin.from("subscriptions").upsert({user_id:userId,stripe_customer_id:customerId,stripe_subscription_id:sub.id,status:sub.status,plan:active?"pro":"free",current_period_end:periodEnd?new Date(periodEnd*1000).toISOString():null},{onConflict:"user_id"})}}else if(event.type==="checkout.session.completed"){const session=event.data.object as Stripe.Checkout.Session;const userId=session.client_reference_id;const customerId=typeof session.customer==="string"?session.customer:null;if(userId&&customerId)await admin.from("subscriptions").upsert({user_id:userId,stripe_customer_id:customerId},{onConflict:"user_id"})}return Response.json({received:true})}catch{await admin.from("stripe_events").delete().eq("id",event.id);return new Response("Webhook processing failed",{status:500})}}
+// Payments are intentionally disabled during the current preorder/pilot stage.
+// Retiring the webhook prevents stale billing events from mutating plan state.
+export async function POST() {
+  return Response.json(
+    { error: "Stripe billing is not active." },
+    { status: 410, headers: { "cache-control": "no-store" } },
+  );
+}
