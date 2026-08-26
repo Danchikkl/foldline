@@ -5,7 +5,7 @@ import { assertSameOrigin, jsonError } from "@/lib/http";
 import { deleteDocumentObject, getDocumentInfo } from "@/lib/storage";
 import { MAX_UPLOAD_BYTES } from "@/lib/constants";
 import { extractDocumentMarkdown } from "@/lib/ocr";
-import { extractInvoice } from "@/lib/invoice";
+import { extractInvoice } from "@/lib/invoice-v2";
 import { validateInvoiceForDocument } from "@/lib/invoice-history";
 
 const schema = z.object({ documentId: z.string().uuid() });
