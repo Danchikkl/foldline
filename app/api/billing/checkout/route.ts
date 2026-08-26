@@ -1,6 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { assertSameOrigin, jsonError } from "@/lib/http";
-import { stripeClient } from "@/lib/stripe";
-import { env } from "@/lib/env";
-export async function POST(request:Request){try{assertSameOrigin(request)}catch(r){return r as Response}const supabase=await createClient();const{data:{user}}=await supabase.auth.getUser();if(!user||!user.email)return jsonError("Unauthorized",401);const{data:sub}=await supabase.from("subscriptions").select("stripe_customer_id,plan").eq("user_id",user.id).maybeSingle();if(sub?.plan==="pro")return jsonError("Already on Pro.",409);const stripe=stripeClient();let customerId=sub?.stripe_customer_id||null;if(!customerId){const customer=await stripe.customers.create({email:user.email,metadata:{user_id:user.id}});customerId=customer.id;const admin=createAdminClient();await admin.from("subscriptions").upsert({user_id:user.id,stripe_customer_id:customerId},{onConflict:"user_id"})}const session=await stripe.checkout.sessions.create({mode:"subscription",customer:customerId,line_items:[{price:env.stripePriceProMonthly(),quantity:1}],client_reference_id:user.id,success_url:`${env.appUrl()}/thank-you?type=billing`,cancel_url:`${env.appUrl()}/settings/billing?canceled=1`,subscription_data:{metadata:{user_id:user.id}},allow_promotion_codes:true});if(!session.url)return jsonError("Stripe did not return a checkout URL.",502);return Response.json({url:session.url})}
+import { jsonError } from "@/lib/http";
+
+export async function POST() {
+  return jsonError("Paid checkout is not live yet. Reserve early access from the Preorder page instead.", 410);
+}
