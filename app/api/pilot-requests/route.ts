@@ -8,7 +8,7 @@ const requestSchema = z.object({
   company: z.string().trim().max(160).optional().default(""),
   role: z.string().trim().max(160).optional().default(""),
   message: z.string().trim().min(1).max(2000),
-  website: z.string().max(0).optional().default(""),
+  website: z.string().max(200).optional().default(""),
 });
 
 export async function POST(request: Request) {
