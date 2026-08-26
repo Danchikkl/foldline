@@ -15,17 +15,12 @@ type PresignResponse = {
   error?: string;
 };
 
-type CompleteResponse = {
-  error?: string;
-};
+type CompleteResponse = { error?: string };
 
 async function readJsonSafely<T extends { error?: string }>(response: Response): Promise<T> {
   const text = await response.text();
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return { error: text || `Request failed with status ${response.status}.` } as T;
-  }
+  try { return JSON.parse(text) as T; }
+  catch { return { error: text || `Request failed with status ${response.status}.` } as T; }
 }
 
 export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
@@ -96,24 +91,13 @@ export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
       onDragLeave={() => setDrag(false)}
       onDrop={(e) => { e.preventDefault(); setDrag(false); void handle(e.dataTransfer.files); }}
     >
-      <input
-        ref={input}
-        type="file"
-        hidden
-        multiple
-        accept="application/pdf,image/png,image/jpeg,image/webp"
-        onChange={(e) => void handle(e.target.files ?? undefined)}
-      />
-      <div className="dropIcon"><FileUp size={25} /></div>
-      <h3>{busy ? "Adding documents to this shipment…" : "Drop shipment documents here"}</h3>
-      <p>{busy ? "Secure upload → integrity check → processing queue" : "Invoice, Packing List, PO, CMR and other shipment documents. Select several files at once."}</p>
-      {busy ? (
-        <div className="progressTrack"><span style={{ width: `${progress}%` }} /></div>
-      ) : (
-        <button className="button buttonDark" onClick={() => input.current?.click()}>Choose documents</button>
-      )}
+      <input ref={input} type="file" hidden multiple accept="application/pdf,image/png,image/jpeg,image/webp" onChange={(e) => void handle(e.target.files ?? undefined)} />
+      <div className="dropIcon"><FileUp size={25}/></div>
+      <h3>{busy ? "Reading your document…" : "Drop an invoice here"}</h3>
+      <p>{busy ? "Secure upload → extraction → reliability gate → verified checks" : "PDF, PNG, JPEG or WebP. Invoice review is the reliable MVP workflow today; other document types are stored but will not receive invented risk results."}</p>
+      {busy ? <div className="progressTrack"><span style={{ width: `${progress}%` }}/></div> : <button className="button buttonDark" onClick={() => input.current?.click()}>Choose document</button>}
       {error && <div className="formError" role="alert">{error}</div>}
-      <div className="dropMeta"><span><ShieldCheck size={14}/> Private storage</span><span><Sparkles size={14}/> Multiple files per shipment</span></div>
+      <div className="dropMeta"><span><ShieldCheck size={14}/> Private storage</span><span><Sparkles size={14}/> Risk withheld when extraction is uncertain</span></div>
     </section>
   );
 }
