@@ -41,8 +41,8 @@ export default async function Dashboard() {
       <div className="dashboard">
         <header className="dashHeader">
           <div>
-            <span className="eyebrow">Shipment control</span>
-            <h1>Check a shipment before an error becomes a problem.</h1>
+            <span className="eyebrow">Document review</span>
+            <h1>Review an invoice before a small error becomes a real problem.</h1>
           </div>
           <Link href="/settings/billing" className="planBadge">
             {plan === "pro" ? "Pro" : "Free"} · {count ?? 0}/{limit} documents this month
@@ -51,21 +51,21 @@ export default async function Dashboard() {
 
         <div className="dashGrid">
           <div className="insightCard">
-            <span className="eyebrow">New shipment</span>
-            <h3>Create one packet for all related documents.</h3>
-            <p>Add the reference and route now. Invoice, Packing List, PO and transport documents will live inside this shipment.</p>
+            <span className="eyebrow">New review</span>
+            <h3>Start with one invoice or a related document set.</h3>
+            <p>Give the review a reference. Route details are optional. After creation you’ll go straight to the upload screen.</p>
             <NewShipmentForm />
           </div>
 
           <div className="insightCard">
-            <span className="eyebrow">How Foldline works</span>
-            <h3>Documents in. Exceptions out.</h3>
-            <p>Foldline will compare values across the shipment packet and surface only what needs a person to check.</p>
+            <span className="eyebrow">What the MVP checks today</span>
+            <h3>Extract. Verify. Review exceptions.</h3>
+            <p>Foldline extracts invoice fields, checks totals and references, and keeps source evidence next to fields that need a person to review.</p>
             <div className="insightStat">
               <ShieldCheck />
               <div>
                 <b>Evidence attached</b>
-                <span>Every discrepancy points back to the source document.</span>
+                <span>Review results point back to the source document instead of asking you to trust extracted values blindly.</span>
               </div>
             </div>
           </div>
@@ -73,7 +73,7 @@ export default async function Dashboard() {
 
         <section id="shipments" className="documentsSection">
           <div className="sectionHeader">
-            <h2>Shipments</h2>
+            <h2>Reviews</h2>
             <span>{shipments?.length ?? 0} shown</span>
           </div>
 
@@ -92,7 +92,7 @@ export default async function Dashboard() {
                       <b>{shipment.reference}</b>
                       <span>
                         <Clock3 size={13} />
-                        {route || "Route not set"} · {new Date(shipment.created_at).toLocaleDateString()}
+                        {route || "No route set"} · {new Date(shipment.created_at).toLocaleDateString()}
                       </span>
                     </div>
                     <span className={`status status-${shipment.status}`}>{shipment.status}</span>
@@ -102,7 +102,7 @@ export default async function Dashboard() {
                 );
               })
             ) : (
-              <div className="emptyList">Create your first shipment above. Its document packet will appear here.</div>
+              <div className="emptyList">Start your first review above.</div>
             )}
           </div>
         </section>
