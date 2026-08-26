@@ -5,7 +5,7 @@ import { assertSameOrigin, jsonError } from "@/lib/http";
 import { deleteDocumentObject, getDocumentInfo } from "@/lib/storage";
 import { MAX_UPLOAD_BYTES } from "@/lib/constants";
 import { extractDocumentMarkdown } from "@/lib/ocr";
-import { extractInvoice } from "@/lib/invoice-v2";
+import { analyzeInvoice } from "@/lib/invoice-engine";
 import { validateInvoiceForDocument } from "@/lib/invoice-history";
 
 const schema = z.object({ documentId: z.string().uuid() });
@@ -86,11 +86,12 @@ export async function POST(request: Request) {
         .eq("id", job.id);
 
       const markdown = await extractDocumentMarkdown(doc);
-      const extracted = extractInvoice(markdown);
+      const analysis = analyzeInvoice(markdown);
       const validation = await validateInvoiceForDocument({
         documentId: doc.id,
         organizationId: doc.organization_id,
-        data: extracted,
+        data: analysis.data,
+        extraction: analysis.extraction,
       });
       const processedAt = new Date().toISOString();
 
@@ -99,7 +100,7 @@ export async function POST(request: Request) {
         .update({
           status: "ready",
           raw_ocr_text: markdown,
-          extracted_data: extracted,
+          extracted_data: analysis.data,
           validation_data: validation,
           error_message: null,
           processed_at: processedAt,
@@ -107,9 +108,7 @@ export async function POST(request: Request) {
         .eq("id", doc.id)
         .eq("owner_id", user.id);
 
-      if (documentUpdateError) {
-        throw new Error("Could not save extracted document data.");
-      }
+      if (documentUpdateError) throw new Error("Could not save extracted document data.");
 
       await admin
         .from("processing_jobs")
@@ -120,10 +119,12 @@ export async function POST(request: Request) {
         ok: true,
         status: "ready",
         extractedCharacters: markdown.length,
+        extractionStatus: validation.extraction.status,
+        riskLevel: validation.risk_level,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Document conversion failed.";
-      console.error("Cloudflare OCR failed", { documentId: doc.id, error: message });
+      console.error("Document analysis failed", { documentId: doc.id, error: message });
 
       await admin
         .from("processing_jobs")
@@ -133,7 +134,7 @@ export async function POST(request: Request) {
         .from("documents")
         .update({
           status: "failed",
-          error_message: "Document conversion failed. Please try again.",
+          error_message: "Document processing failed. Please try again.",
         })
         .eq("id", doc.id)
         .eq("owner_id", user.id);
