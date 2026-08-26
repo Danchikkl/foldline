@@ -47,6 +47,10 @@ function isSeparatorRow(cells: string[]) {
   return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
+function isKnownMetadataLabel(value: string) {
+  return /^(?:metadata|details?|field|value|supplier|поставщик|bin(?:\s*\/\s*iin)?|iin|бин(?:\s*\/\s*иин)?|иин|invoice(?:\s*(?:number|no\.?|#|№))?|сч[её]т(?:\s*(?:номер|no\.?|#|№))?|date|дата|customer|buyer|покупатель|currency|валюта|purchase\s+order|p\.?\s*o\.?|po(?:\s*(?:number|no\.?|#|№))?|description|item|qty|quantity|unit\s*price|price|amount|subtotal|vat(?:\s*\d{1,2}%?)?|total|grand\s+total|total\s+due|итого|ндс)$/i.test(cleanCell(value));
+}
+
 function findLabeledValue(text: string, labels: RegExp[]): EvidenceValue {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const matchesLabel = (value: string) => labels.some((label) => label.test(cleanCell(value)));
@@ -61,7 +65,7 @@ function findLabeledValue(text: string, labels: RegExp[]): EvidenceValue {
       if (!matchesLabel(cells[column])) continue;
 
       const inline = cells[column + 1];
-      if (inline && !matchesLabel(inline) && !/^value$/i.test(inline)) {
+      if (inline && !isKnownMetadataLabel(inline)) {
         return { value: inline, confidence: 0.96, evidence: compact(lines[i]).slice(0, 500) };
       }
 
@@ -69,7 +73,7 @@ function findLabeledValue(text: string, labels: RegExp[]): EvidenceValue {
         const nextCells = splitPipeRow(lines[j]);
         if (!nextCells.length || isSeparatorRow(nextCells)) continue;
         const candidate = nextCells[column];
-        if (candidate && !matchesLabel(candidate) && !/^value$/i.test(candidate)) {
+        if (candidate && !isKnownMetadataLabel(candidate)) {
           return {
             value: candidate,
             confidence: 0.94,
@@ -87,7 +91,7 @@ function findLabeledValue(text: string, labels: RegExp[]): EvidenceValue {
     for (const label of labels) {
       const source = label.source.replace(/^\^/, "").replace(/\$$/, "");
       const inline = line.match(new RegExp(`^(?:${source})\\s*[:：-]\\s*(.+)$`, "i"));
-      if (inline?.[1]) {
+      if (inline?.[1] && !isKnownMetadataLabel(inline[1])) {
         return { value: cleanCell(inline[1]), confidence: 0.95, evidence: compact(lines[i]).slice(0, 500) };
       }
     }
@@ -95,7 +99,7 @@ function findLabeledValue(text: string, labels: RegExp[]): EvidenceValue {
     if (!matchesLabel(line)) continue;
     for (let j = i + 1; j < Math.min(lines.length, i + 5); j++) {
       const candidate = cleanCell(lines[j]);
-      if (!candidate || /^:?-{3,}:?$/.test(candidate) || matchesLabel(candidate) || candidate.includes("|")) continue;
+      if (!candidate || /^:?-{3,}:?$/.test(candidate) || isKnownMetadataLabel(candidate) || candidate.includes("|")) continue;
       return { value: candidate, confidence: 0.93, evidence: `${line} ${candidate}`.slice(0, 500) };
     }
   }
