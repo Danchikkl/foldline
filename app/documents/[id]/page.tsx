@@ -7,7 +7,7 @@ import {
   analyzeInvoice,
   INVOICE_ENGINE_VERSION,
   type ValidationResult,
-} from "@/lib/invoice-engine";
+} from "@/lib/invoice-reliability";
 import { validateInvoiceForDocument } from "@/lib/invoice-history";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { DocumentReview } from "@/components/document-review";
