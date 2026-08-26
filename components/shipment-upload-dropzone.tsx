@@ -19,6 +19,15 @@ type CompleteResponse = {
   error?: string;
 };
 
+async function readJsonSafely<T extends { error?: string }>(response: Response): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return { error: text || `Request failed with status ${response.status}.` } as T;
+  }
+}
+
 export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
   const input = useRef<HTMLInputElement>(null);
   const router = useRouter();
@@ -40,7 +49,7 @@ export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ filename: file.name, contentType: file.type, size: file.size, shipmentId }),
     });
-    const data = (await presign.json()) as PresignResponse;
+    const data = await readJsonSafely<PresignResponse>(presign);
     if (!presign.ok) throw new Error(data.error || `Could not prepare ${file.name}.`);
 
     setProgress(base + Math.floor(span * 0.35));
@@ -56,7 +65,7 @@ export function ShipmentUploadDropzone({ shipmentId }: { shipmentId: string }) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ documentId: data.documentId }),
     });
-    const finished = (await complete.json()) as CompleteResponse;
+    const finished = await readJsonSafely<CompleteResponse>(complete);
     if (!complete.ok) throw new Error(finished.error || `${file.name}: upload verification failed.`);
 
     setProgress(Math.min(100, base + Math.floor(span)));
