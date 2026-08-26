@@ -16,7 +16,7 @@ export default async function ShipmentPage({ params }: Props) {
 
   const { data: shipment } = await supabase
     .from("shipments")
-    .select("id,reference,origin,destination,status,risk_score,created_at,organization_id")
+    .select("id,reference,origin,destination,status,created_at,organization_id")
     .eq("id", id)
     .maybeSingle();
 
@@ -43,8 +43,8 @@ export default async function ShipmentPage({ params }: Props) {
       <div className="dashboard">
         <header className="dashHeader">
           <div>
-            <Link href="/dashboard" className="iconText"><ArrowLeft size={15}/> Back to shipments</Link>
-            <span className="eyebrow">Shipment packet</span>
+            <Link href="/dashboard" className="iconText"><ArrowLeft size={15}/> Back to reviews</Link>
+            <span className="eyebrow">Review packet</span>
             <h1>{shipment.reference}</h1>
             <p>{route}</p>
           </div>
@@ -55,28 +55,28 @@ export default async function ShipmentPage({ params }: Props) {
           <ShipmentUploadDropzone shipmentId={shipment.id} />
 
           <section className="insightCard">
-            <span className="eyebrow">Checks</span>
-            <h3>{openDiscrepancies.length ? `${openDiscrepancies.length} exception${openDiscrepancies.length === 1 ? "" : "s"}` : "No open exceptions"}</h3>
-            <p>Once documents are processed, Foldline will surface quantity, price, weight, currency and reference mismatches here.</p>
-            <div className="insightStat">{openDiscrepancies.length ? <ShieldAlert/> : <ShieldCheck/>}<div><b>Risk score</b><span>{shipment.risk_score ?? 0}%</span></div></div>
+            <span className="eyebrow">Verified exceptions</span>
+            <h3>{openDiscrepancies.length ? `${openDiscrepancies.length} exception${openDiscrepancies.length === 1 ? "" : "s"}` : "No verified packet exceptions"}</h3>
+            <p>Foldline does not show a packet risk percentage until cross-document checks are backed by reliable extraction. The current MVP verifies invoices individually first.</p>
+            <div className="insightStat">{openDiscrepancies.length ? <ShieldAlert/> : <ShieldCheck/>}<div><b>Reliability gate</b><span>{openDiscrepancies.length ? "Review verified exceptions below." : "No packet-level claim is made yet."}</span></div></div>
           </section>
         </div>
 
         <section className="documentsSection">
-          <div className="sectionHeader"><h2>Shipment documents</h2><span>{documents?.length ?? 0} total</span></div>
+          <div className="sectionHeader"><h2>Documents</h2><span>{documents?.length ?? 0} total</span></div>
           <div className="documentList">
             {documents?.length ? documents.map((d: any) => (
               <Link href={`/documents/${d.id}`} className="documentRow" key={d.id}>
                 <div className="docIcon"><FileText/></div>
-                <div className="docName"><b>{d.original_filename}</b><span>{d.document_type ? d.document_type.replaceAll("_", " ") : "Unclassified"}</span></div>
+                <div className="docName"><b>{d.original_filename}</b><span>{d.document_type ? d.document_type.replaceAll("_", " ") : "Type not verified"}</span></div>
                 <span className={`status status-${d.status}`}>{d.status}</span>
               </Link>
-            )) : <div className="emptyList">No documents yet. Add Invoice, Packing List, PO, CMR or other shipment files above.</div>}
+            )) : <div className="emptyList">No documents yet. The reliable review workflow currently starts with an invoice.</div>}
           </div>
         </section>
 
         <section className="documentsSection">
-          <div className="sectionHeader"><h2>Exceptions</h2><span>{openDiscrepancies.length} open</span></div>
+          <div className="sectionHeader"><h2>Packet exceptions</h2><span>{openDiscrepancies.length} verified</span></div>
           <div className="documentList">
             {openDiscrepancies.length ? openDiscrepancies.map((d: any) => (
               <div className="documentRow" key={d.id}>
@@ -84,7 +84,7 @@ export default async function ShipmentPage({ params }: Props) {
                 <div className="docName"><b>{d.title}</b><span>{d.message}</span></div>
                 <span className={`status status-${d.severity}`}>{d.severity}</span>
               </div>
-            )) : <div className="emptyList">No exceptions yet.</div>}
+            )) : <div className="emptyList">No verified packet-level exceptions yet.</div>}
           </div>
         </section>
       </div>
