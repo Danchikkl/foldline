@@ -12,7 +12,7 @@ import {
   type ValidationResult,
 } from "@/lib/invoice-engine";
 
-export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.2";
+export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.3";
 
 export type {
   CheckStatus,
@@ -46,7 +46,10 @@ function validSupplier(data: InvoiceData) {
 
 function validInvoiceNumber(data: InvoiceData) {
   const value = compact(data.invoice_number.value);
-  return value.length >= 2 && value.length <= 50 && /[A-Za-zА-Яа-яЁё0-9]/.test(value);
+  return value.length >= 2
+    && value.length <= 50
+    && /[A-Za-zА-Яа-яЁё0-9]/.test(value)
+    && !/(?:DATE|ДАТА|SUPPLIER|ПОСТАВЩИК|CUSTOMER|BUYER|CURRENCY|SUBTOTAL|VAT|TOTAL|НДС|ИТОГО)/i.test(value);
 }
 
 function validTotal(data: InvoiceData) {
@@ -81,21 +84,68 @@ function arithmeticSignals(data: InvoiceData) {
   return { totalsReconcile, lineSumReconciles, rowMathReconciles, validRows: rows.length };
 }
 
+function strongStructuredInvoiceEvidence(data: InvoiceData) {
+  const secondarySignals = [
+    validSupplier(data),
+    /^\d{12}$/.test(compact(data.supplier_bin.value)),
+    /\d{1,4}[./-]\d{1,2}[./-]\d{1,4}/.test(compact(data.invoice_date.value)),
+    /^(?:KZT|USD|EUR|RUB)$/i.test(compact(data.currency.value)),
+    validTotal(data),
+    data.line_items.some(validRow),
+  ].filter(Boolean).length;
+
+  // An invoice number plus two independent invoice signals is enough to say
+  // "this is an invoice", but not necessarily enough to calculate risk.
+  return validInvoiceNumber(data) && secondarySignals >= 2;
+}
+
+function recoverFalseUnsupported(data: InvoiceData, assessment: ExtractionAssessment) {
+  if (assessment.status !== "unsupported" || !strongStructuredInvoiceEvidence(data)) {
+    return { assessment, recovered: false };
+  }
+
+  // Re-score the structured data without the raw-text document-type gate. This
+  // handles converter artifacts where labels are visibly present but glued to
+  // adjacent values, while unrelated documents remain unsupported.
+  const recovered = assessStructuredInvoiceBase(
+    data,
+    "",
+    false,
+    assessment.issues.filter((issue) => !/does not look like an invoice supported/i.test(issue)),
+  );
+  return { assessment: recovered, recovered: true };
+}
+
 function normalizeExtraction(
   data: InvoiceData,
-  assessment: ExtractionAssessment,
+  originalAssessment: ExtractionAssessment,
   humanConfirmed: boolean,
 ): ExtractionAssessment {
+  const recoveredResult = humanConfirmed
+    ? { assessment: originalAssessment, recovered: false }
+    : recoverFalseUnsupported(data, originalAssessment);
+  const assessment = recoveredResult.assessment;
+
   if (assessment.status === "unsupported" && !humanConfirmed) {
     return { ...assessment, score: 0 };
   }
 
   const arithmetic = arithmeticSignals(data);
-  const issues = assessment.issues.filter((issue) => humanConfirmed ? !/low confidence/i.test(issue) : true);
-  const identityConflict = issues.some((issue) => /^(?:supplier name|invoice number):.*strategies disagree/i.test(issue));
+  let issues = assessment.issues.filter((issue) => humanConfirmed ? !/low confidence/i.test(issue) : true);
+
+  const supplierConflict = issues.some((issue) => /^supplier name:.*strategies disagree/i.test(issue));
+  const invoiceNumberConflict = issues.some((issue) => /^invoice number:.*strategies disagree/i.test(issue));
   const moneyConflict = issues.some((issue) => /^(?:subtotal|vat|total):.*strategies disagree/i.test(issue));
   const lineConflict = issues.some((issue) => /^line items:.*different row sets/i.test(issue));
   const strongArithmetic = arithmetic.totalsReconcile && (arithmetic.validRows === 0 || arithmetic.lineSumReconciles);
+
+  // Two parsers can disagree solely because one saw a converter-glued label.
+  // Do not let that disagreement block a clean value selected with good evidence.
+  const unresolvedSupplierConflict = supplierConflict
+    && !(validSupplier(data) && data.supplier_name.confidence >= 0.8);
+  const unresolvedInvoiceNumberConflict = invoiceNumberConflict
+    && !(validInvoiceNumber(data) && data.invoice_number.confidence >= 0.8);
+  const identityConflict = unresolvedSupplierConflict || unresolvedInvoiceNumberConflict;
 
   const missing: string[] = [];
   if (!validSupplier(data)) missing.push("supplier name could not be read reliably.");
@@ -105,6 +155,16 @@ function normalizeExtraction(
   const unresolvedMoneyConflict = moneyConflict && !strongArithmetic;
   const unresolvedLineConflict = lineConflict && arithmetic.validRows > 0 && !arithmetic.lineSumReconciles;
   const blocking = identityConflict || unresolvedMoneyConflict || unresolvedLineConflict || missing.length > 0;
+
+  // Remove disagreements that were resolved by the chosen value or arithmetic,
+  // so a reliable result does not still advertise a stale extraction warning.
+  issues = issues.filter((issue) => {
+    if (/^supplier name:.*strategies disagree/i.test(issue) && !unresolvedSupplierConflict) return false;
+    if (/^invoice number:.*strategies disagree/i.test(issue) && !unresolvedInvoiceNumberConflict) return false;
+    if (/^(?:subtotal|vat|total):.*strategies disagree/i.test(issue) && !unresolvedMoneyConflict) return false;
+    if (/^line items:.*different row sets/i.test(issue) && !unresolvedLineConflict) return false;
+    return true;
+  });
 
   let score = assessment.score;
   if (arithmetic.totalsReconcile) score += 10;
@@ -129,6 +189,7 @@ function normalizeExtraction(
     issues: status === "reliable" && humanConfirmed ? [] : normalizedIssues,
     signals: [...new Set([
       ...assessment.signals,
+      ...(recoveredResult.recovered ? ["invoice structure recovered despite collapsed converter text"] : []),
       ...(arithmetic.totalsReconcile ? ["subtotal + VAT = total"] : []),
       ...(arithmetic.lineSumReconciles ? ["line-item sum reconciles"] : []),
       ...(arithmetic.rowMathReconciles ? ["detected line-item arithmetic reconciles"] : []),
