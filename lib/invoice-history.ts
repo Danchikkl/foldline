@@ -5,7 +5,7 @@ import {
   validateInvoiceBusiness,
   type ExtractionAssessment,
   type ValidationResult,
-} from "@/lib/invoice-engine";
+} from "@/lib/invoice-reliability";
 
 function normalizeInvoiceNumber(value: unknown) {
   return String(value ?? "")
@@ -59,9 +59,6 @@ export async function validateInvoiceForDocument({
     | null
     | undefined = undefined;
 
-  // Avoid false positives from invoice numbers that happen to be reused by
-  // different suppliers. Duplicate detection only runs when both the invoice
-  // number and supplier identity are good enough to match safely.
   if (organizationId && currentNumber && currentSupplier) {
     const admin = createAdminClient();
     const { data: rows, error } = await admin
