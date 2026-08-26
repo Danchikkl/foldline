@@ -25,12 +25,81 @@ export type InvoiceValidationContext = {
 const empty = (): EvidenceValue => ({ value: null, confidence: 0, evidence: "" });
 const compact = (s: string) => s.replace(/\s+/g, " ").trim();
 const norm = (s: string) => s.replace(/\u00a0/g, " ");
+const cleanCell = (s: string) => compact(s.replace(/^#+\s*/, "").replace(/[*_`]/g, ""));
 
 function firstMatch(text: string, patterns: RegExp[], confidence: number): EvidenceValue {
   for (const re of patterns) {
     const m = text.match(re);
-    if (m?.[1]) return { value: compact(m[1]), confidence, evidence: compact(m[0]).slice(0, 500) };
+    if (m?.[1]) return { value: cleanCell(m[1]), confidence, evidence: compact(m[0]).slice(0, 500) };
   }
+  return empty();
+}
+
+function splitPipeRow(line: string): string[] {
+  if (!line.includes("|")) return [];
+  let cells = line.split("|").map(cleanCell);
+  if (!cells[0]) cells = cells.slice(1);
+  if (!cells.at(-1)) cells = cells.slice(0, -1);
+  return cells;
+}
+
+function isSeparatorRow(cells: string[]) {
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function findLabeledValue(text: string, labels: RegExp[]): EvidenceValue {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const matchesLabel = (value: string) => labels.some((label) => label.test(cleanCell(value)));
+
+  // Markdown tables can represent metadata as either "label | value" or
+  // as a header row followed by a value row. Support both forms.
+  for (let i = 0; i < lines.length; i++) {
+    const cells = splitPipeRow(lines[i]);
+    if (!cells.length || isSeparatorRow(cells)) continue;
+
+    for (let column = 0; column < cells.length; column++) {
+      if (!matchesLabel(cells[column])) continue;
+
+      const inline = cells[column + 1];
+      if (inline && !matchesLabel(inline) && !/^value$/i.test(inline)) {
+        return { value: inline, confidence: 0.96, evidence: compact(lines[i]).slice(0, 500) };
+      }
+
+      for (let j = i + 1; j < Math.min(lines.length, i + 5); j++) {
+        const nextCells = splitPipeRow(lines[j]);
+        if (!nextCells.length || isSeparatorRow(nextCells)) continue;
+        const candidate = nextCells[column];
+        if (candidate && !matchesLabel(candidate) && !/^value$/i.test(candidate)) {
+          return {
+            value: candidate,
+            confidence: 0.94,
+            evidence: `${compact(lines[i])} ${compact(lines[j])}`.slice(0, 500),
+          };
+        }
+        break;
+      }
+    }
+  }
+
+  // Plain text / Markdown headings: LABEL: value or LABEL on one line and value on the next.
+  for (let i = 0; i < lines.length; i++) {
+    const line = cleanCell(lines[i]);
+    for (const label of labels) {
+      const source = label.source.replace(/^\^/, "").replace(/\$$/, "");
+      const inline = line.match(new RegExp(`^(?:${source})\\s*[:：-]\\s*(.+)$`, "i"));
+      if (inline?.[1]) {
+        return { value: cleanCell(inline[1]), confidence: 0.95, evidence: compact(lines[i]).slice(0, 500) };
+      }
+    }
+
+    if (!matchesLabel(line)) continue;
+    for (let j = i + 1; j < Math.min(lines.length, i + 5); j++) {
+      const candidate = cleanCell(lines[j]);
+      if (!candidate || /^:?-{3,}:?$/.test(candidate) || matchesLabel(candidate) || candidate.includes("|")) continue;
+      return { value: candidate, confidence: 0.93, evidence: `${line} ${candidate}`.slice(0, 500) };
+    }
+  }
+
   return empty();
 }
 
@@ -81,20 +150,23 @@ function parseMoney(raw: string | undefined): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-function moneyField(text: string, labels: string[], confidence: number): EvidenceValue {
-  for (const label of labels) {
-    const re = new RegExp(
-      `(?:${label})\\s*[:：]?\\s*(?:KZT|₸|USD|\\$|EUR|€|RUB|₽)?\\s*([0-9][0-9\\s.,'’-]{0,24})`,
-      "i",
-    );
-    const m = text.match(re);
-    const value = parseMoney(m?.[1]);
-    if (value !== null && m) return { value, confidence, evidence: compact(m[0]) };
-  }
+function moneyField(text: string, labels: RegExp[], confidence: number): EvidenceValue {
+  const labeled = findLabeledValue(text, labels);
+  const value = parseMoney(typeof labeled.value === "string" ? labeled.value : undefined);
+  if (value !== null) return { value, confidence, evidence: labeled.evidence };
   return empty();
 }
 
 function detectCurrency(text: string): EvidenceValue {
+  const labeled = findLabeledValue(text, [/^currency$/i, /^валюта$/i]);
+  if (typeof labeled.value === "string") {
+    const value = labeled.value.toUpperCase();
+    if (/\bKZT\b|₸|ТЕНГЕ/i.test(value)) return { value: "KZT", confidence: 0.97, evidence: labeled.evidence };
+    if (/\bUSD\b|\$/i.test(value)) return { value: "USD", confidence: 0.97, evidence: labeled.evidence };
+    if (/\bEUR\b|€/i.test(value)) return { value: "EUR", confidence: 0.97, evidence: labeled.evidence };
+    if (/\bRUB\b|₽|РУБ/i.test(value)) return { value: "RUB", confidence: 0.97, evidence: labeled.evidence };
+  }
+
   const candidates: [RegExp, string][] = [
     [/(?:₸|\bKZT\b|тенге)/i, "KZT"],
     [/(?:\$|\bUSD\b)/i, "USD"],
@@ -112,31 +184,20 @@ function isSupplierCandidate(line: string) {
   if (line.length < 2 || line.length > 120) return false;
   if (!/[A-Za-zА-Яа-яЁё]/.test(line)) return false;
   if (/\.(?:pdf|png|jpe?g|webp)$/i.test(line)) return false;
-  if (/^(?:#+\s*)?(?:invoice|сч[её]т|счет-фактура|накладная|supplier|поставщик|date|дата|bin|бин|iin|иин|buyer|покупатель|currency|валюта|description|subtotal|vat|total)\b/i.test(line)) return false;
+  if (/^(?:metadata|details?|document|field|value)$/i.test(line)) return false;
+  if (/^(?:#+\s*)?(?:invoice|сч[её]т|счет-фактура|накладная|supplier|поставщик|date|дата|bin|бин|iin|иин|buyer|покупатель|customer|currency|валюта|description|subtotal|vat|total)\b/i.test(line)) return false;
   if (/synthetic test document|expected foldline outcome/i.test(line)) return false;
   if (/^\|/.test(line)) return false;
   return true;
 }
 
 function detectSupplier(text: string): EvidenceValue {
-  const lines = text.split(/\r?\n/).map(compact).filter(Boolean).slice(0, 80);
-
-  for (let i = 0; i < lines.length; i++) {
-    if (!/(?:^|\b)(?:supplier|поставщик)(?:\b|$)/i.test(lines[i])) continue;
-
-    const inline = lines[i].match(/(?:supplier|поставщик)(?:\s*\/\s*(?:supplier|поставщик))?\s*[:：-]\s*(.+)$/i)?.[1];
-    if (inline && isSupplierCandidate(compact(inline))) {
-      return { value: compact(inline), confidence: 0.95, evidence: lines[i] };
-    }
-
-    for (let j = i + 1; j < Math.min(lines.length, i + 5); j++) {
-      const candidate = lines[j].replace(/^#+\s*/, "");
-      if (isSupplierCandidate(candidate)) {
-        return { value: candidate, confidence: 0.92, evidence: `${lines[i]} ${candidate}` };
-      }
-    }
+  const labeled = findLabeledValue(text, [/^supplier$/i, /^поставщик$/i]);
+  if (typeof labeled.value === "string" && isSupplierCandidate(cleanCell(labeled.value))) {
+    return { value: cleanCell(labeled.value), confidence: 0.96, evidence: labeled.evidence };
   }
 
+  const lines = text.split(/\r?\n/).map(cleanCell).filter(Boolean).slice(0, 80);
   for (const line of lines.slice(0, 25)) {
     const candidate = line.replace(/^#+\s*/, "");
     if (isSupplierCandidate(candidate)) {
@@ -148,40 +209,56 @@ function detectSupplier(text: string): EvidenceValue {
 }
 
 function parseMarkdownTable(text: string): LineItem[] {
-  const rows = text.split(/\r?\n/).filter((line) => /^\s*\|.*\|\s*$/.test(line));
-  if (rows.length < 3) return [];
+  const lines = text.split(/\r?\n/);
 
-  for (let i = 0; i < rows.length - 2; i++) {
-    const header = rows[i].split("|").map((x) => compact(x).toLowerCase()).filter(Boolean);
-    const separator = rows[i + 1];
-    if (!/---/.test(separator)) continue;
+  for (let i = 0; i < lines.length; i++) {
+    const header = splitPipeRow(lines[i]).map((cell) => cell.toLowerCase());
+    if (header.length < 2) continue;
 
     const descIdx = header.findIndex((h) => /(description|item|наимен|товар|услуг)/i.test(h));
-    const qtyIdx = header.findIndex((h) => /(qty|quantity|кол-?во|колич)/i.test(h));
-    const unitIdx = header.findIndex((h) => /(unit price|price|цена)/i.test(h));
-    const amountIdx = header.findIndex((h) => /(amount|sum|стоим|сумма)/i.test(h));
+    const qtyIdx = header.findIndex((h) => /^(qty|quantity|кол-?во|колич)/i.test(h));
+    const unitIdx = header.findIndex((h) => /(unit\s*price|price|цена)/i.test(h));
+    const amountIdx = header.findIndex((h) => /^(amount|sum|стоим|сумма)/i.test(h));
     if (descIdx < 0 || amountIdx < 0) continue;
 
     const items: LineItem[] = [];
-    for (const row of rows.slice(i + 2)) {
-      if (/---/.test(row)) break;
-      const rawCells = row.split("|");
-      const cells = rawCells.slice(1, -1).map(compact);
-      if (cells.length < header.length) continue;
+    let misses = 0;
+
+    for (let j = i + 1; j < lines.length && misses < 3; j++) {
+      const cells = splitPipeRow(lines[j]);
+      if (!cells.length) {
+        if (lines[j].trim()) misses += 1;
+        continue;
+      }
+      if (isSeparatorRow(cells)) continue;
+      if (cells.length <= Math.max(descIdx, amountIdx)) {
+        misses += 1;
+        continue;
+      }
+
       const description = cells[descIdx] || "";
+      if (/^(?:subtotal|vat|total|итого|ндс)$/i.test(description)) break;
+
       const amount = parseMoney(cells[amountIdx]);
-      if (!description || amount === null) continue;
+      if (!description || amount === null) {
+        misses += 1;
+        continue;
+      }
+
       items.push({
         description,
         quantity: qtyIdx >= 0 ? parseMoney(cells[qtyIdx]) : null,
         unit_price: unitIdx >= 0 ? parseMoney(cells[unitIdx]) : null,
         amount,
-        confidence: 0.82,
-        evidence: compact(row).slice(0, 700),
+        confidence: 0.86,
+        evidence: compact(lines[j]).slice(0, 700),
       });
+      misses = 0;
     }
+
     if (items.length) return items.slice(0, 500);
   }
+
   return [];
 }
 
@@ -209,7 +286,7 @@ function parsePlainTextLineItems(text: string): LineItem[] {
       quantity,
       unit_price: unitPrice,
       amount,
-      confidence: 0.76,
+      confidence: 0.78,
       evidence: line.slice(0, 700),
     });
   }
@@ -219,25 +296,58 @@ function parsePlainTextLineItems(text: string): LineItem[] {
 
 function parseLineItems(text: string): LineItem[] {
   const markdownItems = parseMarkdownTable(text);
-  if (markdownItems.length) return markdownItems;
-  return parsePlainTextLineItems(text);
+  const plainItems = parsePlainTextLineItems(text);
+  const combined = [...markdownItems];
+
+  for (const item of plainItems) {
+    const duplicate = combined.some((existing) =>
+      existing.description.toLowerCase() === item.description.toLowerCase()
+      && existing.amount === item.amount
+      && existing.quantity === item.quantity,
+    );
+    if (!duplicate) combined.push(item);
+  }
+
+  return combined.slice(0, 500);
 }
 
 export function extractInvoice(rawText: string): InvoiceData {
   const text = norm(rawText).slice(0, 250_000);
+
+  const supplierBinLabel = findLabeledValue(text, [/^bin\s*\/\s*iin$/i, /^bin$/i, /^iin$/i, /^бин\s*\/\s*иин$/i, /^бин$/i, /^иин$/i]);
+  const supplierBinValue = typeof supplierBinLabel.value === "string"
+    ? supplierBinLabel.value.match(/\b(\d{12})\b/)?.[1]
+    : undefined;
+
+  const invoiceNumberLabel = findLabeledValue(text, [
+    /^invoice\s*(?:number|no\.?|#|№)$/i,
+    /^сч[её]т\s*(?:номер|no\.?|#|№)$/i,
+  ]);
+
+  const invoiceDateLabel = findLabeledValue(text, [/^date$/i, /^дата$/i]);
+
   return {
     supplier_name: detectSupplier(text),
-    supplier_bin: firstMatch(text, [/(?:БИН|BIN)\s*[:№#-]?\s*(\d{12})/i, /(?:ИИН|IIN)\s*[:№#-]?\s*(\d{12})/i], 0.97),
-    invoice_number: firstMatch(text, [/(?:сч[её]т)\s*(?:no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i, /(?:invoice)\s*(?:no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i], 0.9),
+    supplier_bin: supplierBinValue
+      ? { value: supplierBinValue, confidence: 0.98, evidence: supplierBinLabel.evidence }
+      : firstMatch(text, [/(?:БИН|BIN)(?:\s*\/\s*(?:ИИН|IIN))?\s*[:№#-]?\s*(\d{12})/i, /(?:ИИН|IIN)\s*[:№#-]?\s*(\d{12})/i], 0.97),
+    invoice_number: typeof invoiceNumberLabel.value === "string"
+      ? { value: cleanCell(invoiceNumberLabel.value), confidence: 0.96, evidence: invoiceNumberLabel.evidence }
+      : firstMatch(text, [
+          /(?:сч[её]т)\s*(?:номер|no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i,
+          /(?:invoice)\s*(?:number|no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i,
+        ], 0.9),
     po_number: firstMatch(text, [
       /(?:purchase\s+order|p\.?\s*o\.?|po)\s*(?:number|no\.?|№|#)\s*[:.-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i,
       /(?:purchase\s+order|p\.?\s*o\.?|po)\s*[:.-]\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})/i,
     ], 0.9),
-    invoice_date: firstMatch(text, [/(?:date|дата)\s*[:.-]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i, /(?:date|дата)\s*[:.-]?\s*(\d{4}-\d{2}-\d{2})/i], 0.9),
+    invoice_date: typeof invoiceDateLabel.value === "string" && /\d/.test(invoiceDateLabel.value)
+      ? { value: cleanCell(invoiceDateLabel.value), confidence: 0.95, evidence: invoiceDateLabel.evidence }
+      : firstMatch(text, [/(?:date|дата)\s*[:.-]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/i, /(?:date|дата)\s*[:.-]?\s*(\d{4}-\d{2}-\d{2})/i], 0.9),
     currency: detectCurrency(text),
-    subtotal: moneyField(text, ["subtotal", "итого без ндс", "без ндс"], 0.84),
-    vat: moneyField(text, ["vat(?:\\s*\\d{1,2}%?)?", "ндс(?:\\s*\\d{1,2}%?)?"], 0.88),
-    total: moneyField(text, ["grand total", "total due", "итого к оплате", "всего к оплате", "итого", "total"], 0.92),
+    subtotal: moneyField(text, [/^subtotal$/i, /^итого без ндс$/i, /^без ндс$/i], 0.9),
+    vat: moneyField(text, [/^vat(?:\s*\d{1,2}%?)?$/i, /^ндс(?:\s*\d{1,2}%?)?$/i], 0.92),
+    total: moneyField(text, [/^grand total$/i, /^total due$/i, /^итого к оплате$/i, /^всего к оплате$/i, /^итого$/i, /^total$/i], 0.95),
     line_items: parseLineItems(text),
   };
 }
