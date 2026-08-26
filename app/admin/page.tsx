@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Mail, UserRound, Building2, Clock3 } from "lucide-react";
+import { Mail, UserRound, Building2, Clock3, ClipboardCheck } from "lucide-react";
 import { requireAdmin } from "@/lib/admin";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -22,15 +22,28 @@ type PilotRequest = {
   status: "new" | "contacted" | "closed";
 };
 
+type Preorder = {
+  id: string;
+  created_at: string;
+  user_id: string;
+  email: string;
+  status: "reserved" | "contacted" | "converted" | "cancelled";
+};
+
 export default async function AdminPage() {
   await requireAdmin();
 
   // Service-role access happens only after the authenticated user passed the exact ID allowlist.
   const admin = createAdminClient();
-  const [{ data: requests, error: requestsError }, usersResult] = await Promise.all([
+  const [{ data: requests, error: requestsError }, { data: preorderRows, error: preordersError }, usersResult] = await Promise.all([
     admin
       .from("pilot_requests")
       .select("id,created_at,name,email,company,role,message,status")
+      .order("created_at", { ascending: false })
+      .limit(100),
+    admin
+      .from("preorders")
+      .select("id,created_at,user_id,email,status")
       .order("created_at", { ascending: false })
       .limit(100),
     admin.auth.admin.listUsers({ page: 1, perPage: 100 }),
@@ -38,14 +51,16 @@ export default async function AdminPage() {
 
   const users = usersResult.data?.users ?? [];
   const leads = (requests ?? []) as PilotRequest[];
+  const preorders = (preorderRows ?? []) as Preorder[];
   const newCount = leads.filter((lead) => lead.status === "new").length;
+  const reservedCount = preorders.filter((preorder) => preorder.status === "reserved").length;
 
   return (
     <main className="contentPage">
       <div className="container">
         <span className="eyebrow">Founder only</span>
         <h1>Foldline admin</h1>
-        <p className="lede">Private view of signups and pilot requests. This route is not linked from the public product.</p>
+        <p className="lede">Private view of signups, pilot requests and preorder reservations. This route is not linked from the public product.</p>
 
         <div className="dashGrid">
           <section className="insightCard">
@@ -54,11 +69,42 @@ export default async function AdminPage() {
             <p>{newCount} currently marked new.</p>
           </section>
           <section className="insightCard">
+            <span className="eyebrow">Preorders</span>
+            <h3>{preorders.length} reservation{preorders.length === 1 ? "" : "s"}</h3>
+            <p>{reservedCount} currently reserved.</p>
+          </section>
+          <section className="insightCard">
             <span className="eyebrow">Auth signups</span>
             <h3>{users.length} user{users.length === 1 ? "" : "s"}</h3>
             <p>First 100 Supabase Auth users, newest data loaded server-side.</p>
           </section>
         </div>
+
+        <section className="documentsSection">
+          <div className="sectionHeader">
+            <h2>Preorders</h2>
+            <span>{preorders.length} shown</span>
+          </div>
+          {preordersError ? (
+            <div className="legalNotice">Preorders are unavailable until migration 007_preorders.sql is applied.</div>
+          ) : preorders.length ? (
+            <div className="documentList">
+              {preorders.map((preorder) => (
+                <article className="documentRow" key={preorder.id}>
+                  <div className="docIcon"><ClipboardCheck /></div>
+                  <div className="docName">
+                    <b>{preorder.email}</b>
+                    <span>User ID: {preorder.user_id}</span>
+                    <span>Reserved {new Date(preorder.created_at).toLocaleString()}</span>
+                  </div>
+                  <span className={`status status-${preorder.status}`}>{preorder.status}</span>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="emptyList">No preorder reservations yet.</div>
+          )}
+        </section>
 
         <section className="documentsSection">
           <div className="sectionHeader">
