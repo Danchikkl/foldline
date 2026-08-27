@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { env } from "@/lib/env";
 import { assertNotCrossSite } from "@/lib/http";
 
 export async function POST(request: Request) {
@@ -9,6 +8,8 @@ export async function POST(request: Request) {
   const supabase = await createClient();
   await supabase.auth.signOut();
 
-  // POST -> 303 -> GET avoids preserving the POST method on redirect.
-  return NextResponse.redirect(`${env.appUrl()}/`, 303);
+  // Redirect back to the same public origin that received the sign-out request.
+  // This keeps logout working across workers.dev, previews, and future custom domains
+  // without depending on NEXT_PUBLIC_APP_URL or a hard-coded hostname.
+  return NextResponse.redirect(new URL("/", request.url), 303);
 }
