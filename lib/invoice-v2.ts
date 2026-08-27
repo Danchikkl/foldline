@@ -7,17 +7,15 @@ import {
 
 const compact = (value: string) => value.replace(/\s+/g, " ").trim();
 const moneyToken = String.raw`(?:\d{1,3}(?:[\s,'’.]\d{3})+|\d+(?:[.,]\d{1,2})?)`;
+const currencyToken = String.raw`(?:KZT|USD|EUR|RUB|₸|\$|€|₽)`;
 
 function evidence(value: string | number | null, confidence: number, source = ""): EvidenceValue {
   return { value, confidence, evidence: compact(source).slice(0, 500) };
 }
 
 /**
- * Cloudflare's document-to-Markdown conversion can occasionally flatten adjacent
- * PDF cells without a delimiter (for example
- * `INVOICE NUMBERKZ-2026-0813DATE13.08.2026`).  The extraction layer should not
- * treat that layout artifact as document content.  Restore boundaries around the
- * small set of invoice labels before semantic parsing.
+ * Cloudflare document conversion can flatten adjacent PDF cells without a
+ * delimiter. Restore boundaries around invoice labels before semantic parsing.
  */
 function repairCollapsedLabels(rawText: string) {
   let text = rawText.normalize("NFKC").replace(/\u00a0/g, " ");
@@ -26,8 +24,6 @@ function repairCollapsedLabels(rawText: string) {
     text = text.replace(new RegExp(`(${pattern})`, "gi"), " $1 ");
   };
 
-  // Long/specific labels first. These tokens are distinctive enough that they
-  // can be restored even when glued directly to the previous cell value.
   [
     String.raw`INVOICE\s*(?:NUMBER|NO\.?|#|№)`,
     String.raw`СЧ[ЕЁ]Т\s*(?:НОМЕР|NO\.?|#|№)`,
@@ -49,21 +45,23 @@ function repairCollapsedLabels(rawText: string) {
     "CURRENCY",
     "ВАЛЮТА",
     "DESCRIPTION",
+    "ОПИСАНИЕ",
     "QUANTITY",
     "QTY",
+    String.raw`КОЛ-?ВО`,
+    "КОЛИЧЕСТВО",
     "AMOUNT",
+    "СУММА",
+    "ЦЕНА",
     "SUBTOTAL",
     "VAT",
     "НДС",
   ].forEach(surround);
 
-  // DATE is a common substring in prose (for example "update"), so only split
-  // it when it is immediately followed by a date-looking numeric value.
   text = text.replace(/(DATE)(?=\s*\d{1,4}[./-])/gi, " $1 ");
   text = text.replace(/(ДАТА)(?=\s*\d{1,4}[./-])/gi, " $1 ");
 
-  // Avoid splitting the TOTAL substring inside SUBTOTAL.
-  text = text.replace(/(?<!SUB)(TOTAL)(?=\s*[:：]?\s*(?:KZT|USD|EUR|RUB|₸|\$|€|₽|\d))/gi, " $1 ");
+  text = text.replace(/(^|[^A-Z])(TOTAL)(?=\s*[:：]?\s*(?:KZT|USD|EUR|RUB|₸|\$|€|₽|\d))/gi, "$1 $2 ");
   text = text.replace(/(ИТОГО)(?=\s*[:：]?\s*(?:KZT|USD|EUR|RUB|₸|\$|€|₽|\d))/gi, " $1 ");
 
   return text;
@@ -75,7 +73,7 @@ function semanticText(rawText: string) {
     .replace(/[|]/g, " ")
     .replace(/[#*_`]+/g, " ");
   const flat = compact(normalized);
-  const start = flat.search(/\b(?:INVOICE|СЧ[ЕЁ]Т)\b/i);
+  const start = flat.search(/(?:^|\s)(?:INVOICE|СЧ[ЕЁ]Т)(?:\s|\/|$)/i);
   return start >= 0 ? flat.slice(start) : flat;
 }
 
@@ -128,20 +126,20 @@ function parseMoney(raw: string): number | null {
 }
 
 function captureMoney(text: string, label: string, confidence: number): EvidenceValue {
-  const match = text.match(new RegExp(`(?:^|\\s)(?:${label})\\s*[:：]?\\s*(?:KZT|USD|EUR|RUB|₸|\\$|€|₽)?\\s*(${moneyToken})`, "i"));
+  const match = text.match(new RegExp(`(?:^|\\s)(?:${label})\\s*[:：]?\\s*(?:${currencyToken})?\\s*(${moneyToken})`, "i"));
   if (!match?.[1]) return evidence(null, 0);
   const value = parseMoney(match[1]);
   return value === null ? evidence(null, 0) : evidence(value, confidence, match[0]);
 }
 
 function parseCurrency(text: string): EvidenceValue {
-  const labeled = text.match(/\b(?:CURRENCY|ВАЛЮТА)\b\s*[:：-]?\s*(KZT|USD|EUR|RUB|₸|\$|€|₽)/i);
+  const labeled = text.match(/(?:CURRENCY|ВАЛЮТА)(?:\s*\/\s*(?:CURRENCY|ВАЛЮТА))?\s*[:：-]?\s*(KZT|USD|EUR|RUB|₸|\$|€|₽)/i);
   if (labeled?.[1]) {
     const token = labeled[1].toUpperCase();
     const value = token === "₸" ? "KZT" : token === "$" ? "USD" : token === "€" ? "EUR" : token === "₽" ? "RUB" : token;
     return evidence(value, 0.98, labeled[0]);
   }
-  const fallback = text.match(/\b(KZT|USD|EUR|RUB)\b/i);
+  const fallback = text.match(/(?:^|\s)(KZT|USD|EUR|RUB)(?:\s|$)/i);
   return fallback?.[1] ? evidence(fallback[1].toUpperCase(), 0.9, fallback[0]) : evidence(null, 0);
 }
 
@@ -149,31 +147,53 @@ function close(a: number, b: number) {
   return Math.abs(a - b) <= Math.max(1, Math.abs(b) * 0.01);
 }
 
-function makeLineItem(description: string, rawQuantity: string, rawUnitPrice: string, rawAmount: string, source: string, confidence: number): LineItem | null {
+function makeLineItem(
+  description: string,
+  rawQuantity: string,
+  rawUnitPrice: string,
+  rawAmount: string,
+  source: string,
+  confidence: number,
+  requireArithmetic = false,
+): LineItem | null {
   const quantity = parseMoney(rawQuantity);
   const unitPrice = parseMoney(rawUnitPrice);
   const amount = parseMoney(rawAmount);
   const cleanDescription = compact(description);
   if (!cleanDescription || quantity === null || unitPrice === null || amount === null) return null;
   if (quantity <= 0 || unitPrice < 0 || amount < 0) return null;
-  if (!close(quantity * unitPrice, amount)) return null;
+  const arithmeticOk = close(quantity * unitPrice, amount);
+  if (requireArithmetic && !arithmeticOk) return null;
+
   return {
     description: cleanDescription,
     quantity,
     unit_price: unitPrice,
     amount,
-    confidence,
+    confidence: arithmeticOk ? confidence : Math.min(confidence, 0.88),
     evidence: compact(source).slice(0, 700),
   };
 }
 
 function parseFlattenedLineItems(text: string): LineItem[] {
-  const header = /\bDESCRIPTION\b\s*\b(?:QTY|QUANTITY)\b\s*\bUNIT\s*PRICE\b\s*\bAMOUNT\b/i;
-  const match = header.exec(text);
-  if (!match) return [];
+  const descriptionMatch = /(?:DESCRIPTION|ОПИСАНИЕ)/i.exec(text);
+  if (!descriptionMatch) return [];
 
-  const afterHeader = text.slice(match.index + match[0].length);
-  const end = afterHeader.search(/\b(?:SUBTOTAL|ИТОГО\s+БЕЗ\s+НДС|VAT|НДС|TOTAL)\b/i);
+  const headerWindow = text.slice(descriptionMatch.index, descriptionMatch.index + 500);
+  const qtyMatch = /(?:QTY|QUANTITY|КОЛ-?ВО|КОЛИЧЕСТВО)/i.exec(headerWindow);
+  if (!qtyMatch) return [];
+  const unitWindow = headerWindow.slice(qtyMatch.index + qtyMatch[0].length);
+  const unitMatch = /(?:UNIT\s*PRICE|ЦЕНА)/i.exec(unitWindow);
+  if (!unitMatch) return [];
+  const amountWindow = unitWindow.slice(unitMatch.index + unitMatch[0].length);
+  const amountMatch = /(?:AMOUNT|СУММА)/i.exec(amountWindow);
+  if (!amountMatch) return [];
+
+  const headerLength = qtyMatch.index + qtyMatch[0].length
+    + unitMatch.index + unitMatch[0].length
+    + amountMatch.index + amountMatch[0].length;
+  const afterHeader = text.slice(descriptionMatch.index + headerLength);
+  const end = afterHeader.search(/(?:SUBTOTAL|ИТОГО\s+БЕЗ\s+НДС|ПРОМЕЖУТОЧНЫЙ\s+ИТОГ|VAT|НДС|TOTAL)/i);
   const section = compact(end >= 0 ? afterHeader.slice(0, end) : afterHeader.slice(0, 5000));
   if (!section) return [];
 
@@ -188,25 +208,32 @@ function parseFlattenedLineItems(text: string): LineItem[] {
     }
   };
 
-  // Normal text / Markdown output with whitespace between table cells.
+  const descChars = String.raw`A-Za-zА-Яа-яЁё0-9/&(),.+%µμ°²³:_\- `;
+  const currencySuffix = String.raw`(?:\s*${currencyToken})?`;
+
+  // Normal table text, including cells such as "2,400 KZT" and "210.00 USD".
+  // Arithmetic is intentionally NOT required here: a wrong row is business
+  // evidence that validation must surface, not something extraction should drop.
   const spacedRow = new RegExp(
-    `([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9/&(),.+\\- ]{1,120}?)\\s+(${moneyToken})\\s+(${moneyToken})\\s+(${moneyToken})(?=\\s+[A-Za-zА-Яа-яЁё]|$)`,
+    `([${descChars}]{2,180}?)\\s+(${moneyToken})${currencySuffix}\\s+(${moneyToken})${currencySuffix}\\s+(${moneyToken})${currencySuffix}(?=\\s+[A-Za-zА-Яа-яЁё]|$)`,
     "g",
   );
   for (const candidate of section.matchAll(spacedRow)) {
-    add(makeLineItem(candidate[1], candidate[2], candidate[3], candidate[4], candidate[0], 0.93));
+    const description = compact(candidate[1]);
+    if (!/[A-Za-zА-Яа-яЁё]/.test(description)) continue;
+    add(makeLineItem(description, candidate[2], candidate[3], candidate[4], candidate[0], 0.93));
   }
 
-  // PDF converters sometimes remove every separator between numeric cells:
-  // `Laboratory notebooks103,50035,000`.  This fallback only accepts a split
-  // when quantity × unit price = amount, so it cannot manufacture arbitrary rows.
+  // Converters can glue numeric cells together. Without explicit separators the
+  // split is ambiguous, so this fallback remains arithmetic-gated to avoid
+  // inventing rows from arbitrary digit sequences.
   const groupedMoney = String.raw`\d{1,3}(?:[,'’.]\d{3})+(?:[.,]\d{1,2})?`;
   const collapsedRow = new RegExp(
-    `([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё/&(),.+\\- ]{1,120}?)(\\d{1,6})(${groupedMoney})(${groupedMoney})(?=[A-Za-zА-Яа-яЁё]|$)`,
+    `([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё/&(),.+%µμ°²³:_\\- ]{1,160}?)(\\d{1,6})(${groupedMoney})(${groupedMoney})(?=[A-Za-zА-Яа-яЁё]|$)`,
     "g",
   );
   for (const candidate of section.matchAll(collapsedRow)) {
-    add(makeLineItem(candidate[1], candidate[2], candidate[3], candidate[4], candidate[0], 0.9));
+    add(makeLineItem(candidate[1], candidate[2], candidate[3], candidate[4], candidate[0], 0.9, true));
   }
 
   return items.slice(0, 500);
@@ -220,19 +247,24 @@ export function extractInvoice(rawText: string): InvoiceData {
   const legacy = extractInvoiceLegacy(rawText);
   const text = semanticText(rawText).slice(0, 250_000);
 
+  const supplierLabel = /(?:SUPPLIER|ПОСТАВЩИК)(?:\s*\/\s*(?:SUPPLIER|ПОСТАВЩИК))?/i;
+  const supplierIdLabel = /(?:BIN(?:\s*\/\s*IIN)?|IIN|БИН(?:\s*\/\s*ИИН)?|ИИН)(?:\s*\/\s*(?:BIN(?:\s*\/\s*IIN)?|IIN|БИН(?:\s*\/\s*ИИН)?|ИИН))?/i;
+  const invoiceNumberLabel = /(?:INVOICE\s*(?:NUMBER|NO\.?|#|№)|СЧ[ЕЁ]Т\s*(?:НОМЕР|NO\.?|#|№))(?:\s*\/\s*(?:INVOICE\s*(?:NUMBER|NO\.?|#|№)|СЧ[ЕЁ]Т\s*(?:НОМЕР|NO\.?|#|№)))?/i;
+  const dateLabel = /(?:DATE|ДАТА)(?:\s*\/\s*(?:DATE|ДАТА))?/i;
+
   const supplier = captureBetween(
     text,
-    /\b(?:SUPPLIER|ПОСТАВЩИК)\b/i,
-    /\b(?:BIN\s*\/\s*IIN|BIN|IIN|БИН\s*\/\s*ИИН|БИН|ИИН|INVOICE\s*(?:NUMBER|NO\.?|#|№)|СЧ[ЕЁ]Т\s*(?:НОМЕР|NO\.?|#|№)|DATE|ДАТА|CUSTOMER|BUYER|ПОКУПАТЕЛЬ|CURRENCY|ВАЛЮТА|DESCRIPTION)\b/i,
+    supplierLabel,
+    /(?:BIN|IIN|БИН|ИИН|INVOICE|СЧ[ЕЁ]Т|DATE|ДАТА|CUSTOMER|BUYER|ПОКУПАТЕЛЬ|CURRENCY|ВАЛЮТА|DESCRIPTION|ОПИСАНИЕ)/i,
   );
   const supplierClean = typeof supplier.value === "string" && !/PDFFormatVersion|metadata/i.test(supplier.value) ? supplier : evidence(null, 0);
 
-  const supplierBin = capturePattern(text, /\b(?:BIN\s*\/\s*IIN|BIN|IIN|БИН\s*\/\s*ИИН|БИН|ИИН)\b\s*[:：-]?\s*(\d{12})/i, 0.99);
-  const invoiceNumber = capturePattern(text, /\b(?:INVOICE\s*(?:NUMBER|NO\.?|#|№)|СЧ[ЕЁ]Т\s*(?:НОМЕР|NO\.?|#|№))\b\s*[:：-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})(?=\s|$)/i, 0.98);
-  const invoiceDate = capturePattern(text, /\b(?:DATE|ДАТА)\b\s*[:：-]?\s*(\d{1,4}[./-]\d{1,2}[./-]\d{1,4})/i, 0.97);
-  const poNumber = capturePattern(text, /\b(?:PURCHASE\s+ORDER|P\.?\s*O\.?|PO)(?:\s*(?:NUMBER|NO\.?|#|№))?\b\s*[:：-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})(?=\s|$)/i, 0.95);
+  const supplierBin = capturePattern(text, new RegExp(`${supplierIdLabel.source}\\s*[:：-]?\\s*(\\d{12})`, "i"), 0.99);
+  const invoiceNumber = capturePattern(text, new RegExp(`${invoiceNumberLabel.source}\\s*[:：-]?\\s*([A-ZА-Я0-9][A-ZА-Я0-9_\\/-]{1,40})(?=\\s|$)`, "i"), 0.98);
+  const invoiceDate = capturePattern(text, new RegExp(`${dateLabel.source}\\s*[:：-]?\\s*(\\d{1,4}[./-]\\d{1,2}[./-]\\d{1,4})`, "i"), 0.97);
+  const poNumber = capturePattern(text, /(?:PURCHASE\s+ORDER|P\.?\s*O\.?|PO|ЗАКАЗ)(?:\s*(?:NUMBER|NO\.?|#|№))?(?:\s*\/\s*(?:PURCHASE\s+ORDER|P\.?\s*O\.?|PO|ЗАКАЗ)(?:\s*(?:NUMBER|NO\.?|#|№))?)?\s*[:：-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})(?=\s|$)/i, 0.95);
 
-  const subtotal = captureMoney(text, "SUBTOTAL|ИТОГО\\s+БЕЗ\\s+НДС|БЕЗ\\s+НДС", 0.97);
+  const subtotal = captureMoney(text, "SUBTOTAL|ИТОГО\\s+БЕЗ\\s+НДС|ПРОМЕЖУТОЧНЫЙ\\s+ИТОГ|БЕЗ\\s+НДС", 0.97);
   const vat = captureMoney(text, "VAT(?:\\s*\\d{1,2}\\s*%)?|НДС(?:\\s*\\d{1,2}\\s*%)?", 0.97);
   const total = captureMoney(text, "GRAND\\s+TOTAL|TOTAL\\s+DUE|ИТОГО\\s+К\\s+ОПЛАТЕ|ВСЕГО\\s+К\\s+ОПЛАТЕ|ИТОГО|TOTAL", 0.98);
   const currency = parseCurrency(text);
