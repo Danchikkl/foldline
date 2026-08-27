@@ -13,10 +13,6 @@ function evidence(value: string | number | null, confidence: number, source = ""
   return { value, confidence, evidence: compact(source).slice(0, 500) };
 }
 
-/**
- * Cloudflare document conversion can flatten adjacent PDF cells without a
- * delimiter. Restore boundaries around invoice labels before semantic parsing.
- */
 function repairCollapsedLabels(rawText: string) {
   let text = rawText.normalize("NFKC").replace(/\u00a0/g, " ");
 
@@ -60,7 +56,6 @@ function repairCollapsedLabels(rawText: string) {
 
   text = text.replace(/(DATE)(?=\s*\d{1,4}[./-])/gi, " $1 ");
   text = text.replace(/(ДАТА)(?=\s*\d{1,4}[./-])/gi, " $1 ");
-
   text = text.replace(/(^|[^A-Z])(TOTAL)(?=\s*[:：]?\s*(?:KZT|USD|EUR|RUB|₸|\$|€|₽|\d))/gi, "$1 $2 ");
   text = text.replace(/(ИТОГО)(?=\s*[:：]?\s*(?:KZT|USD|EUR|RUB|₸|\$|€|₽|\d))/gi, " $1 ");
 
@@ -180,19 +175,22 @@ function parseFlattenedLineItems(text: string): LineItem[] {
   if (!descriptionMatch) return [];
 
   const headerWindow = text.slice(descriptionMatch.index, descriptionMatch.index + 500);
-  const qtyMatch = /(?:QTY|QUANTITY|КОЛ-?ВО|КОЛИЧЕСТВО)/i.exec(headerWindow);
-  if (!qtyMatch) return [];
-  const unitWindow = headerWindow.slice(qtyMatch.index + qtyMatch[0].length);
-  const unitMatch = /(?:UNIT\s*PRICE|ЦЕНА)/i.exec(unitWindow);
-  if (!unitMatch) return [];
-  const amountWindow = unitWindow.slice(unitMatch.index + unitMatch[0].length);
-  const amountMatch = /(?:AMOUNT|СУММА)/i.exec(amountWindow);
-  if (!amountMatch) return [];
+  const headerPatterns = [
+    /(?:DESCRIPTION|ОПИСАНИЕ)/i,
+    /(?:QTY|QUANTITY|КОЛ-?ВО|КОЛИЧЕСТВО)/i,
+    /(?:UNIT\s*PRICE|ЦЕНА)/i,
+    /(?:AMOUNT|СУММА)/i,
+  ];
+  const headerMatches = headerPatterns
+    .map((pattern) => pattern.exec(headerWindow))
+    .filter((match): match is RegExpExecArray => Boolean(match));
+  if (headerMatches.length < 3) return [];
 
-  const headerLength = qtyMatch.index + qtyMatch[0].length
-    + unitMatch.index + unitMatch[0].length
-    + amountMatch.index + amountMatch[0].length;
-  const afterHeader = text.slice(descriptionMatch.index + headerLength);
+  // PDF text extraction may reorder header cells even though row values remain in
+  // visual column order. Start rows after the furthest detected header label,
+  // rather than assuming Description -> Qty -> Unit price -> Amount text order.
+  const headerEnd = Math.max(...headerMatches.map((match) => match.index + match[0].length));
+  const afterHeader = text.slice(descriptionMatch.index + headerEnd);
   const end = afterHeader.search(/(?:SUBTOTAL|ИТОГО\s+БЕЗ\s+НДС|ПРОМЕЖУТОЧНЫЙ\s+ИТОГ|VAT|НДС|TOTAL)/i);
   const section = compact(end >= 0 ? afterHeader.slice(0, end) : afterHeader.slice(0, 5000));
   if (!section) return [];
@@ -211,9 +209,6 @@ function parseFlattenedLineItems(text: string): LineItem[] {
   const descChars = String.raw`A-Za-zА-Яа-яЁё0-9/&(),.+%µμ°²³:_\- `;
   const currencySuffix = String.raw`(?:\s*${currencyToken})?`;
 
-  // Normal table text, including cells such as "2,400 KZT" and "210.00 USD".
-  // Arithmetic is intentionally NOT required here: a wrong row is business
-  // evidence that validation must surface, not something extraction should drop.
   const spacedRow = new RegExp(
     `([${descChars}]{2,180}?)\\s+(${moneyToken})${currencySuffix}\\s+(${moneyToken})${currencySuffix}\\s+(${moneyToken})${currencySuffix}(?=\\s+[A-Za-zА-Яа-яЁё]|$)`,
     "g",
@@ -224,9 +219,6 @@ function parseFlattenedLineItems(text: string): LineItem[] {
     add(makeLineItem(description, candidate[2], candidate[3], candidate[4], candidate[0], 0.93));
   }
 
-  // Converters can glue numeric cells together. Without explicit separators the
-  // split is ambiguous, so this fallback remains arithmetic-gated to avoid
-  // inventing rows from arbitrary digit sequences.
   const groupedMoney = String.raw`\d{1,3}(?:[,'’.]\d{3})+(?:[.,]\d{1,2})?`;
   const collapsedRow = new RegExp(
     `([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё/&(),.+%µμ°²³:_\\- ]{1,160}?)(\\d{1,6})(${groupedMoney})(${groupedMoney})(?=[A-Za-zА-Яа-яЁё]|$)`,
