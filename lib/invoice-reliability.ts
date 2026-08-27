@@ -1,4 +1,5 @@
 import type { InvoiceData, LineItem } from "@/lib/invoice";
+import { extractInvoice as extractInvoiceSemantic } from "@/lib/invoice-v2";
 import {
   analyzeInvoice as analyzeInvoiceBase,
   assessStructuredInvoice as assessStructuredInvoiceBase,
@@ -12,7 +13,7 @@ import {
   type ValidationResult,
 } from "@/lib/invoice-engine";
 
-export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.3";
+export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.4";
 
 export type {
   CheckStatus,
@@ -26,10 +27,6 @@ export type {
 
 function compact(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
-}
-
-function hasValue(value: unknown) {
-  return value !== null && value !== undefined && compact(value) !== "";
 }
 
 function close(a: number, b: number) {
@@ -56,11 +53,15 @@ function validTotal(data: InvoiceData) {
   return typeof data.total.value === "number" && Number.isFinite(data.total.value) && data.total.value >= 0;
 }
 
-function validRow(item: LineItem) {
+/**
+ * Extraction decides whether a row is structurally plausible. Arithmetic is a
+ * business check and MUST NOT be used to discard a row: a wrong multiplication
+ * is exactly the exception Foldline is supposed to surface.
+ */
+function validRowShape(item: LineItem) {
   if (!compact(item.description) || item.amount === null || !Number.isFinite(item.amount)) return false;
   if (item.quantity !== null && (!Number.isFinite(item.quantity) || item.quantity <= 0)) return false;
   if (item.unit_price !== null && (!Number.isFinite(item.unit_price) || item.unit_price < 0)) return false;
-  if (item.quantity !== null && item.unit_price !== null && !close(item.quantity * item.unit_price, item.amount)) return false;
   return true;
 }
 
@@ -68,7 +69,7 @@ function arithmeticSignals(data: InvoiceData) {
   const subtotal = typeof data.subtotal.value === "number" ? data.subtotal.value : null;
   const vat = typeof data.vat.value === "number" ? data.vat.value : null;
   const total = typeof data.total.value === "number" ? data.total.value : null;
-  const rows = data.line_items.filter(validRow);
+  const rows = data.line_items.filter(validRowShape);
   const rowSum = rows.reduce((sum, item) => sum + (item.amount ?? 0), 0);
 
   const totalsReconcile = subtotal !== null && vat !== null && total !== null && close(subtotal + vat, total);
@@ -91,11 +92,9 @@ function strongStructuredInvoiceEvidence(data: InvoiceData) {
     /\d{1,4}[./-]\d{1,2}[./-]\d{1,4}/.test(compact(data.invoice_date.value)),
     /^(?:KZT|USD|EUR|RUB)$/i.test(compact(data.currency.value)),
     validTotal(data),
-    data.line_items.some(validRow),
+    data.line_items.some(validRowShape),
   ].filter(Boolean).length;
 
-  // An invoice number plus two independent invoice signals is enough to say
-  // "this is an invoice", but not necessarily enough to calculate risk.
   return validInvoiceNumber(data) && secondarySignals >= 2;
 }
 
@@ -104,9 +103,6 @@ function recoverFalseUnsupported(data: InvoiceData, assessment: ExtractionAssess
     return { assessment, recovered: false };
   }
 
-  // Re-score the structured data without the raw-text document-type gate. This
-  // handles converter artifacts where labels are visibly present but glued to
-  // adjacent values, while unrelated documents remain unsupported.
   const recovered = assessStructuredInvoiceBase(
     data,
     "",
@@ -139,8 +135,6 @@ function normalizeExtraction(
   const lineConflict = issues.some((issue) => /^line items:.*different row sets/i.test(issue));
   const strongArithmetic = arithmetic.totalsReconcile && (arithmetic.validRows === 0 || arithmetic.lineSumReconciles);
 
-  // Two parsers can disagree solely because one saw a converter-glued label.
-  // Do not let that disagreement block a clean value selected with good evidence.
   const unresolvedSupplierConflict = supplierConflict
     && !(validSupplier(data) && data.supplier_name.confidence >= 0.8);
   const unresolvedInvoiceNumberConflict = invoiceNumberConflict
@@ -156,8 +150,6 @@ function normalizeExtraction(
   const unresolvedLineConflict = lineConflict && arithmetic.validRows > 0 && !arithmetic.lineSumReconciles;
   const blocking = identityConflict || unresolvedMoneyConflict || unresolvedLineConflict || missing.length > 0;
 
-  // Remove disagreements that were resolved by the chosen value or arithmetic,
-  // so a reliable result does not still advertise a stale extraction warning.
   issues = issues.filter((issue) => {
     if (/^supplier name:.*strategies disagree/i.test(issue) && !unresolvedSupplierConflict) return false;
     if (/^invoice number:.*strategies disagree/i.test(issue) && !unresolvedInvoiceNumberConflict) return false;
@@ -198,11 +190,98 @@ function normalizeExtraction(
   };
 }
 
+function lineCheck(
+  id: string,
+  label: string,
+  status: CheckStatus,
+  severity: ValidationCheck["severity"],
+  message: string,
+  fields: string[] = [],
+): ValidationCheck {
+  return { id, label, status, severity, message, fields };
+}
+
+function withReliableLineChecks(checks: ValidationCheck[], data: InvoiceData) {
+  const rows = data.line_items.filter(validRowShape);
+  if (!rows.length) return checks;
+
+  const subtotal = typeof data.subtotal.value === "number" ? data.subtotal.value : null;
+  const vat = typeof data.vat.value === "number" ? data.vat.value : null;
+  const total = typeof data.total.value === "number" ? data.total.value : null;
+  const inconsistent = rows.filter((item) =>
+    item.quantity !== null
+    && item.unit_price !== null
+    && !close(item.quantity * item.unit_price, item.amount ?? 0),
+  );
+
+  const replacement: ValidationCheck[] = [
+    inconsistent.length
+      ? lineCheck(
+          "line-math",
+          "Line-item arithmetic",
+          "fail",
+          "medium",
+          `${inconsistent.length} line item${inconsistent.length === 1 ? "" : "s"} do not satisfy quantity × unit price = amount.`,
+          ["line_items"],
+        )
+      : lineCheck("line-math", "Line-item arithmetic", "pass", "info", "Detected line items are arithmetically consistent."),
+  ];
+
+  const sum = rows.reduce((acc, item) => acc + (item.amount ?? 0), 0);
+  const target = subtotal ?? (total !== null && vat !== null ? total - vat : total);
+  if (target !== null) {
+    replacement.push(close(sum, target)
+      ? lineCheck("line-sum", "Line-item sum", "pass", "info", "Line-item amounts reconcile with the invoice subtotal/total.")
+      : lineCheck(
+          "line-sum",
+          "Line-item sum",
+          "fail",
+          "medium",
+          `Line items sum to ${sum.toFixed(2)}, while the expected amount is ${target.toFixed(2)}.`,
+          ["line_items", subtotal !== null ? "subtotal" : "total"],
+        ));
+  } else {
+    replacement.push(lineCheck("line-sum", "Line-item sum", "skipped", "info", "No reliable subtotal/total was available for a line-item sum check."));
+  }
+
+  const firstLineIndex = checks.findIndex((item) => item.id === "line-math" || item.id === "line-sum");
+  const withoutOld = checks.filter((item) => item.id !== "line-math" && item.id !== "line-sum");
+  if (firstLineIndex < 0) return [...withoutOld, ...replacement];
+
+  const insertionIndex = Math.min(firstLineIndex, withoutOld.length);
+  return [
+    ...withoutOld.slice(0, insertionIndex),
+    ...replacement,
+    ...withoutOld.slice(insertionIndex),
+  ];
+}
+
+function riskFromChecks(checks: ValidationCheck[]) {
+  const failures = checks.filter((item) => item.status === "fail");
+  const hasHigh = failures.some((item) => item.severity === "high");
+  const hasMedium = failures.some((item) => item.severity === "medium");
+  const riskLevel: RiskLevel = hasHigh ? "high" : hasMedium ? "medium" : "low";
+  const riskScore = hasHigh ? 80 : hasMedium ? 50 : 0;
+  return { failures, riskLevel, riskScore };
+}
+
 export function analyzeInvoice(rawText: string) {
   const base = analyzeInvoiceBase(rawText);
+  const semantic = extractInvoiceSemantic(rawText);
+  const useSemanticRows = semantic.line_items.length > 0
+    && semantic.line_items.length >= base.data.line_items.length;
+  const data: InvoiceData = useSemanticRows
+    ? { ...base.data, line_items: semantic.line_items }
+    : base.data;
+
+  const carriedIssues = base.extraction.issues.filter((issue) => !/^line items:/i.test(issue));
+  const reassessed = useSemanticRows
+    ? assessStructuredInvoiceBase(data, rawText, false, carriedIssues)
+    : base.extraction;
+
   return {
-    data: base.data,
-    extraction: normalizeExtraction(base.data, base.extraction, false),
+    data,
+    extraction: normalizeExtraction(data, reassessed, false),
   };
 }
 
@@ -236,20 +315,47 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
     humanConfirmed: false,
     extraction,
   });
+  const checks = withReliableLineChecks(base.checks, data);
+  const { failures, riskLevel, riskScore } = riskFromChecks(checks);
+  const duplicateFailure = checks.some((item) => item.id === "duplicate-invoice-number" && item.status === "fail");
+  const enoughBusinessEvidence = arithmeticCheckRan(checks) || duplicateFailure;
 
-  const duplicateFailure = base.checks.some((item) => item.id === "duplicate-invoice-number" && item.status === "fail");
-  const enoughBusinessEvidence = arithmeticCheckRan(base.checks) || duplicateFailure;
-
-  if (extraction.status !== "reliable") {
+  if (extraction.status === "unsupported") {
     return {
       ...base,
       engine_version: INVOICE_ENGINE_VERSION,
       extraction,
+      checks,
       risk_score: null,
       risk_level: "not_calculated",
-      summary: extraction.status === "unsupported"
-        ? "This document is outside the invoice workflow supported by the current MVP."
-        : "Foldline could not read enough of this invoice reliably, so business risk was not calculated.",
+      summary: "This document is outside the invoice workflow supported by the current MVP.",
+    };
+  }
+
+  // A verified exception is useful even when an unrelated extraction field still
+  // needs review. We only withhold a LOW-risk claim until extraction is reliable.
+  if (extraction.status !== "reliable") {
+    if (failures.length > 0 && enoughBusinessEvidence) {
+      return {
+        ...base,
+        engine_version: INVOICE_ENGINE_VERSION,
+        extraction,
+        checks,
+        risk_score: riskScore,
+        risk_level: riskLevel,
+        needs_review: [...new Set([...base.needs_review, ...failures.flatMap((item) => item.fields)])],
+        summary: "A verified exception was found, although some extracted fields still need review.",
+      };
+    }
+
+    return {
+      ...base,
+      engine_version: INVOICE_ENGINE_VERSION,
+      extraction,
+      checks,
+      risk_score: null,
+      risk_level: "not_calculated",
+      summary: "Foldline could not read enough of this invoice reliably to make a low-risk claim.",
     };
   }
 
@@ -258,6 +364,7 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
       ...base,
       engine_version: INVOICE_ENGINE_VERSION,
       extraction,
+      checks,
       risk_score: null,
       risk_level: "not_calculated",
       summary: "The document was read, but there is not enough verifiable arithmetic or history evidence to make a risk claim.",
@@ -268,5 +375,14 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
     ...base,
     engine_version: INVOICE_ENGINE_VERSION,
     extraction,
+    checks,
+    risk_score: riskScore,
+    risk_level: riskLevel,
+    needs_review: [...new Set([...base.needs_review, ...failures.flatMap((item) => item.fields)])],
+    summary: riskLevel === "low"
+      ? "The checks Foldline could verify passed."
+      : riskLevel === "medium"
+        ? "One or more verified checks need attention."
+        : "A verified high-severity exception needs attention.",
   };
 }
