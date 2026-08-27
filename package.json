@@ -13,8 +13,9 @@
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "cf-typegen": "wrangler types cloudflare-env.d.ts --env-interface CloudflareEnv --include-runtime false",
+    "test:invoice": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/invoice-test-loader.mjs ./scripts/run-invoice-fixtures.ts",
     "test:gateway": "PYTHONPATH=services/ocr-gateway python3 services/ocr-gateway/test_security.py",
-    "check": "npm run typecheck && npm run build && npm run test:gateway"
+    "check": "npm run typecheck && npm run build && npm run test:invoice && npm run test:gateway"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1106.0",
