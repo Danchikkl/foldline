@@ -1,4 +1,4 @@
-import type { InvoiceData, LineItem } from "@/lib/invoice";
+import type { EvidenceValue, InvoiceData, LineItem } from "@/lib/invoice";
 import { extractInvoice as extractInvoiceSemantic } from "@/lib/invoice-v2";
 import {
   analyzeInvoice as analyzeInvoiceBase,
@@ -13,7 +13,7 @@ import {
   type ValidationResult,
 } from "@/lib/invoice-engine";
 
-export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.5";
+export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.6";
 
 export type {
   CheckStatus,
@@ -31,6 +31,123 @@ function compact(value: unknown) {
 
 function close(a: number, b: number) {
   return Math.abs(a - b) <= Math.max(1, Math.abs(b) * 0.01);
+}
+
+function parseMoneyToken(raw: string) {
+  let cleaned = raw
+    .normalize("NFKC")
+    .replace(/[\u00a0\s'’]/g, "")
+    .replace(/[^0-9,.-]/g, "");
+  if (!cleaned || !/\d/.test(cleaned)) return null;
+
+  const commas = (cleaned.match(/,/g) || []).length;
+  const dots = (cleaned.match(/\./g) || []).length;
+  let normalized = cleaned;
+
+  if (commas && dots) {
+    const lastComma = cleaned.lastIndexOf(",");
+    const lastDot = cleaned.lastIndexOf(".");
+    const decimal = lastComma > lastDot ? "," : ".";
+    const index = Math.max(lastComma, lastDot);
+    const fraction = cleaned.length - index - 1;
+    normalized = fraction === 1 || fraction === 2
+      ? (decimal === "," ? cleaned.replace(/\./g, "").replace(/,/g, ".") : cleaned.replace(/,/g, ""))
+      : cleaned.replace(/[.,]/g, "");
+  } else if (commas) {
+    const parts = cleaned.split(",");
+    const last = parts.at(-1) || "";
+    normalized = last.length === 3 ? parts.join("") : (last.length <= 2 ? `${parts.slice(0, -1).join("")}.${last}` : parts.join(""));
+  } else if (dots) {
+    const parts = cleaned.split(".");
+    const last = parts.at(-1) || "";
+    normalized = last.length === 3 ? parts.join("") : (last.length <= 2 ? `${parts.slice(0, -1).join("")}.${last}` : parts.join(""));
+  }
+
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : null;
+}
+
+const moneyToken = String.raw`(?:\d{1,3}(?:[\s,'’.]\d{3})+|\d+(?:[.,]\d{1,2})?)`;
+const currencyToken = String.raw`(?:KZT|USD|EUR|RUB|₸|\$|€|₽)`;
+
+function moneyEvidence(value: number, source: string, confidence = 0.94): EvidenceValue {
+  return { value, confidence, evidence: compact(source).slice(0, 500) };
+}
+
+function recoverMoneyAroundLabel(rawText: string, labelPattern: string): EvidenceValue | null {
+  const text = rawText.normalize("NFKC").replace(/\u00a0/g, " ");
+  const lines = text.split(/\r?\n/).map(compact).filter(Boolean);
+  const forward = new RegExp(`(?:^|\\s)(?:${labelPattern})\\s*[:：-]?\\s*(?:${currencyToken}\\s*)?(${moneyToken})(?:\\s*${currencyToken})?(?=\\s|$)`, "i");
+  const reverse = new RegExp(`(?:^|\\s)(${moneyToken})(?:\\s*${currencyToken})?\\s+(?:${labelPattern})(?=\\s|$)`, "i");
+
+  for (const line of lines) {
+    const direct = line.match(forward) || line.match(reverse);
+    if (!direct?.[1]) continue;
+    const value = parseMoneyToken(direct[1]);
+    if (value !== null) return moneyEvidence(value, direct[0], 0.95);
+  }
+
+  const flat = compact(text);
+  const direct = flat.match(forward) || flat.match(reverse);
+  if (direct?.[1]) {
+    const value = parseMoneyToken(direct[1]);
+    if (value !== null) return moneyEvidence(value, direct[0], 0.92);
+  }
+  return null;
+}
+
+function recoverReorderedTotals(rawText: string) {
+  const text = compact(rawText.normalize("NFKC").replace(/\u00a0/g, " "));
+  const subtotalLabel = String.raw`(?:SUBTOTAL|ИТОГО\s+БЕЗ\s+НДС|ПРОМЕЖУТОЧНЫЙ\s+ИТОГ)`;
+  const vatLabel = String.raw`(?:VAT(?:\s*\d{1,2}\s*%)?|НДС(?:\s*\d{1,2}\s*%)?)`;
+  const totalLabel = String.raw`(?:GRAND\s+TOTAL|TOTAL\s+DUE|ИТОГО\s+К\s+ОПЛАТЕ|ВСЕГО\s+К\s+ОПЛАТЕ|TOTAL|ИТОГО)`;
+
+  const grouped = text.match(new RegExp(
+    `${subtotalLabel}\\s+${vatLabel}\\s+${totalLabel}\\s+(${moneyToken})(?:\\s*${currencyToken})?\\s+(${moneyToken})(?:\\s*${currencyToken})?\\s+(${moneyToken})(?:\\s*${currencyToken})?`,
+    "i",
+  ));
+
+  const groupedValues = grouped
+    ? [grouped[1], grouped[2], grouped[3]].map((token) => parseMoneyToken(token))
+    : [null, null, null];
+
+  return {
+    subtotal: groupedValues[0] !== null
+      ? moneyEvidence(groupedValues[0]!, grouped?.[0] || "", 0.95)
+      : recoverMoneyAroundLabel(rawText, subtotalLabel),
+    vat: groupedValues[1] !== null
+      ? moneyEvidence(groupedValues[1]!, grouped?.[0] || "", 0.95)
+      : recoverMoneyAroundLabel(rawText, vatLabel),
+    total: groupedValues[2] !== null
+      ? moneyEvidence(groupedValues[2]!, grouped?.[0] || "", 0.95)
+      : recoverMoneyAroundLabel(rawText, totalLabel),
+  };
+}
+
+function explicitlyNotInvoice(rawText: string) {
+  const text = rawText.normalize("NFKC");
+  return /\bNOT\s+AN?\s+INVOICE\b/i.test(text)
+    || /\bTHIS\s+IS\s+NOT\s+AN?\s+INVOICE\b/i.test(text)
+    || /НЕ\s+ЯВЛЯЕТСЯ\s+(?:СЧ[ЕЁ]ТОМ|ИНВОЙСОМ)/i.test(text);
+}
+
+function sanitizePoReference(data: InvoiceData): InvoiceData {
+  const po = compact(data.po_number.value);
+  if (!po || /\d/.test(po)) return data;
+  return {
+    ...data,
+    po_number: { value: null, confidence: 0, evidence: "" },
+  };
+}
+
+function recoverCriticalMoney(rawText: string, data: InvoiceData): InvoiceData {
+  const recovered = recoverReorderedTotals(rawText);
+  return {
+    ...data,
+    subtotal: typeof data.subtotal.value === "number" ? data.subtotal : (recovered.subtotal ?? data.subtotal),
+    vat: typeof data.vat.value === "number" ? data.vat : (recovered.vat ?? data.vat),
+    total: typeof data.total.value === "number" ? data.total : (recovered.total ?? data.total),
+  };
 }
 
 function validSupplier(data: InvoiceData) {
@@ -122,6 +239,9 @@ function strongStructuredInvoiceEvidence(data: InvoiceData) {
 }
 
 function recoverFalseUnsupported(data: InvoiceData, assessment: ExtractionAssessment) {
+  if (assessment.signals.includes("explicit non-invoice statement in source")) {
+    return { assessment, recovered: false };
+  }
   if (assessment.status !== "unsupported" || !strongStructuredInvoiceEvidence(data)) {
     return { assessment, recovered: false };
   }
@@ -235,14 +355,26 @@ export function analyzeInvoice(rawText: string) {
   const semantic = extractInvoiceSemantic(rawText);
   const useSemanticRows = semantic.line_items.length > 0
     && semantic.line_items.length >= base.data.line_items.length;
-  const data: InvoiceData = useSemanticRows
+  const selected: InvoiceData = useSemanticRows
     ? { ...base.data, line_items: semantic.line_items }
     : base.data;
+  const data = recoverCriticalMoney(rawText, sanitizePoReference(selected));
+
+  if (explicitlyNotInvoice(rawText)) {
+    return {
+      data,
+      extraction: {
+        status: "unsupported",
+        score: 0,
+        document_type: "unknown",
+        issues: ["The source explicitly states that it is not an invoice."],
+        signals: ["explicit non-invoice statement in source"],
+      } satisfies ExtractionAssessment,
+    };
+  }
 
   const carriedIssues = base.extraction.issues.filter((issue) => !/^line items:/i.test(issue));
-  const reassessed = useSemanticRows
-    ? assessStructuredInvoiceBase(data, rawText, false, carriedIssues)
-    : base.extraction;
+  const reassessed = assessStructuredInvoiceBase(data, rawText, false, carriedIssues);
   const normalized = normalizeExtraction(data, reassessed, false);
 
   return {
