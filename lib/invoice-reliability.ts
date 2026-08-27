@@ -54,9 +54,13 @@ function validTotal(data: InvoiceData) {
 }
 
 function validRowShape(item: LineItem) {
-  if (!compact(item.description) || item.amount === null || !Number.isFinite(item.amount)) return false;
-  if (item.quantity !== null && (!Number.isFinite(item.quantity) || item.quantity <= 0)) return false;
-  if (item.unit_price !== null && (!Number.isFinite(item.unit_price) || item.unit_price < 0)) return false;
+  const description = compact(item.description);
+  if (description.length < 2 || description.length > 180) return false;
+  if (!/[A-Za-zА-Яа-яЁё]/.test(description)) return false;
+  if (/PDFFormatVersion|metadata|synthetic test document.*invoice|invoice.*supplier.*date/i.test(description)) return false;
+  if (item.amount === null || !Number.isFinite(item.amount) || item.amount < 0 || item.amount >= 1e15) return false;
+  if (item.quantity !== null && (!Number.isFinite(item.quantity) || item.quantity <= 0 || item.quantity >= 1e9)) return false;
+  if (item.unit_price !== null && (!Number.isFinite(item.unit_price) || item.unit_price < 0 || item.unit_price >= 1e15)) return false;
   return true;
 }
 
@@ -167,7 +171,12 @@ function normalizeExtraction(
 
   const unresolvedMoneyConflict = moneyConflict && !strongArithmetic;
   const unresolvedLineConflict = lineConflict && arithmetic.validRows > 0 && !arithmetic.lineSumReconciles;
-  const blocking = identityConflict || unresolvedMoneyConflict || unresolvedLineConflict || missing.length > 0;
+  const missingDetectedLineItems = issues.some((issue) => /line-item table was detected, but no rows were extracted reliably/i.test(issue));
+  const blocking = identityConflict
+    || unresolvedMoneyConflict
+    || unresolvedLineConflict
+    || missingDetectedLineItems
+    || missing.length > 0;
 
   issues = issues.filter((issue) => {
     if (/^supplier name:.*strategies disagree/i.test(issue) && !unresolvedSupplierConflict) return false;
@@ -177,11 +186,14 @@ function normalizeExtraction(
     return true;
   });
 
+  // Normalization may be called more than once in the processing pipeline.
+  // Add evidence bonuses only once so a repeated pass cannot inflate the score
+  // and accidentally turn needs_review back into reliable.
   let score = assessment.score;
-  if (arithmetic.totalsReconcile) score += 10;
-  if (arithmetic.lineSumReconciles) score += 10;
-  if (arithmetic.rowMathReconciles) score += 5;
-  if (humanConfirmed) score += 20;
+  if (arithmetic.totalsReconcile && !assessment.signals.includes("subtotal + VAT = total")) score += 10;
+  if (arithmetic.lineSumReconciles && !assessment.signals.includes("line-item sum reconciles")) score += 10;
+  if (arithmetic.rowMathReconciles && !assessment.signals.includes("detected line-item arithmetic reconciles")) score += 5;
+  if (humanConfirmed && !assessment.signals.includes("human review confirmed the structured values")) score += 20;
   score = Math.max(0, Math.min(100, score));
 
   const status: ExtractionStatus = !blocking && (score >= 72 || humanConfirmed) ? "reliable" : "needs_review";
@@ -207,72 +219,6 @@ function normalizeExtraction(
       ...(humanConfirmed ? ["human review confirmed the structured values"] : []),
     ])],
   };
-}
-
-function lineCheck(
-  id: string,
-  label: string,
-  status: CheckStatus,
-  severity: ValidationCheck["severity"],
-  message: string,
-  fields: string[] = [],
-): ValidationCheck {
-  return { id, label, status, severity, message, fields };
-}
-
-function withReliableLineChecks(checks: ValidationCheck[], data: InvoiceData) {
-  const rows = data.line_items.filter(validRowShape);
-  if (!rows.length) return checks;
-
-  const subtotal = typeof data.subtotal.value === "number" ? data.subtotal.value : null;
-  const vat = typeof data.vat.value === "number" ? data.vat.value : null;
-  const total = typeof data.total.value === "number" ? data.total.value : null;
-  const inconsistent = rows.filter((item) =>
-    item.quantity !== null
-    && item.unit_price !== null
-    && !close(item.quantity * item.unit_price, item.amount ?? 0),
-  );
-
-  const replacement: ValidationCheck[] = [
-    inconsistent.length
-      ? lineCheck(
-          "line-math",
-          "Line-item arithmetic",
-          "fail",
-          "medium",
-          `${inconsistent.length} line item${inconsistent.length === 1 ? "" : "s"} do not satisfy quantity × unit price = amount.`,
-          ["line_items"],
-        )
-      : lineCheck("line-math", "Line-item arithmetic", "pass", "info", "Detected line items are arithmetically consistent."),
-  ];
-
-  const sum = rows.reduce((acc, item) => acc + (item.amount ?? 0), 0);
-  const target = subtotal ?? (total !== null && vat !== null ? total - vat : total);
-  if (target !== null) {
-    replacement.push(close(sum, target)
-      ? lineCheck("line-sum", "Line-item sum", "pass", "info", "Line-item amounts reconcile with the invoice subtotal/total.")
-      : lineCheck(
-          "line-sum",
-          "Line-item sum",
-          "fail",
-          "medium",
-          `Line items sum to ${sum.toFixed(2)}, while the expected amount is ${target.toFixed(2)}.`,
-          ["line_items", subtotal !== null ? "subtotal" : "total"],
-        ));
-  } else {
-    replacement.push(lineCheck("line-sum", "Line-item sum", "skipped", "info", "No reliable subtotal/total was available for a line-item sum check."));
-  }
-
-  const firstLineIndex = checks.findIndex((item) => item.id === "line-math" || item.id === "line-sum");
-  const withoutOld = checks.filter((item) => item.id !== "line-math" && item.id !== "line-sum");
-  if (firstLineIndex < 0) return [...withoutOld, ...replacement];
-
-  const insertionIndex = Math.min(firstLineIndex, withoutOld.length);
-  return [
-    ...withoutOld.slice(0, insertionIndex),
-    ...replacement,
-    ...withoutOld.slice(insertionIndex),
-  ];
 }
 
 function riskFromChecks(checks: ValidationCheck[]) {
@@ -336,7 +282,10 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
     humanConfirmed: false,
     extraction,
   });
-  const checks = withReliableLineChecks(base.checks, data);
+  // invoice-engine is the single source of truth for business checks.
+  // Reliability only decides whether those verified checks are allowed to
+  // produce a risk claim when extraction is incomplete.
+  const checks = base.checks;
   const { failures, riskLevel, riskScore } = riskFromChecks(checks);
   const duplicateFailure = checks.some((item) => item.id === "duplicate-invoice-number" && item.status === "fail");
   const enoughBusinessEvidence = arithmeticCheckRan(checks) || duplicateFailure;
