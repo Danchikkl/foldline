@@ -13,7 +13,7 @@ import {
   type ValidationResult,
 } from "@/lib/invoice-engine";
 
-export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.7";
+export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.8";
 
 export type {
   CheckStatus,
@@ -133,9 +133,24 @@ function explicitlyNotInvoice(rawText: string) {
     || /НЕ\s+ЯВЛЯЕТСЯ\s+(?:СЧ[ЕЁ]ТОМ|ИНВОЙСОМ)/i.test(text);
 }
 
-function sanitizePoReference(data: InvoiceData): InvoiceData {
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sanitizePoReference(data: InvoiceData, rawText: string): InvoiceData {
   const po = compact(data.po_number.value);
-  if (!po || /\d/.test(po)) return data;
+  if (!po) return data;
+
+  // OCR/converter noise such as "rtLab" must not become a green PO check.
+  // For the current MVP a PO reference must contain a digit and must follow an
+  // explicit standalone PO/P.O./Purchase Order label in the source text.
+  const hasDigit = /\d/.test(po);
+  const explicitLabel = new RegExp(
+    `(?:^|[\\s|])(?:PURCHASE\\s+ORDER|P\\.?\\s*O\\.?|PO)(?:\\s*(?:NUMBER|NO\\.?|#|№))?\\s*[:：#-]?\\s*${escapeRegex(po)}(?=$|[\\s|])`,
+    "i",
+  ).test(rawText.normalize("NFKC"));
+
+  if (hasDigit && explicitLabel) return data;
   return {
     ...data,
     po_number: { value: null, confidence: 0, evidence: "" },
@@ -368,7 +383,7 @@ export function analyzeInvoice(rawText: string) {
   const selected: InvoiceData = useSemanticRows
     ? { ...base.data, line_items: semantic.line_items }
     : base.data;
-  const data = recoverCriticalMoney(rawText, sanitizePoReference(selected));
+  const data = recoverCriticalMoney(rawText, sanitizePoReference(selected, rawText));
 
   if (explicitlyNotInvoice(rawText)) {
     return {
