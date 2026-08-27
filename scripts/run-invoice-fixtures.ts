@@ -1,4 +1,4 @@
-import { runInvoiceReliabilityFixtures } from "../lib/invoice-reliability-fixtures.ts";
+import { runInvoiceReliabilityFixtures } from "../lib/invoice-reliability-fixtures";
 
 const results = runInvoiceReliabilityFixtures();
 for (const result of results) {
