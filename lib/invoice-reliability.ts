@@ -13,7 +13,7 @@ import {
   type ValidationResult,
 } from "@/lib/invoice-engine";
 
-export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.4";
+export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.5";
 
 export type {
   CheckStatus,
@@ -53,16 +53,35 @@ function validTotal(data: InvoiceData) {
   return typeof data.total.value === "number" && Number.isFinite(data.total.value) && data.total.value >= 0;
 }
 
-/**
- * Extraction decides whether a row is structurally plausible. Arithmetic is a
- * business check and MUST NOT be used to discard a row: a wrong multiplication
- * is exactly the exception Foldline is supposed to surface.
- */
 function validRowShape(item: LineItem) {
   if (!compact(item.description) || item.amount === null || !Number.isFinite(item.amount)) return false;
   if (item.quantity !== null && (!Number.isFinite(item.quantity) || item.quantity <= 0)) return false;
   if (item.unit_price !== null && (!Number.isFinite(item.unit_price) || item.unit_price < 0)) return false;
   return true;
+}
+
+function lineTableExpected(rawText: string) {
+  const text = rawText.normalize("NFKC");
+  const signals = [
+    /(?:DESCRIPTION|ОПИСАНИЕ)/i,
+    /(?:QTY|QUANTITY|КОЛ-?ВО|КОЛИЧЕСТВО)/i,
+    /(?:UNIT\s*PRICE|ЦЕНА)/i,
+    /(?:AMOUNT|СУММА)/i,
+  ].filter((pattern) => pattern.test(text)).length;
+  return signals >= 3;
+}
+
+function guardMissingLineItems(rawText: string, data: InvoiceData, assessment: ExtractionAssessment) {
+  if (!rawText || data.line_items.some(validRowShape) || !lineTableExpected(rawText)) return assessment;
+  return {
+    ...assessment,
+    status: assessment.status === "unsupported" ? "unsupported" : "needs_review",
+    issues: [...new Set([
+      ...assessment.issues,
+      "Line-item table was detected, but no rows were extracted reliably.",
+    ])],
+    signals: [...new Set([...assessment.signals, "line-item table detected in source"])]
+  } satisfies ExtractionAssessment;
 }
 
 function arithmeticSignals(data: InvoiceData) {
@@ -278,10 +297,11 @@ export function analyzeInvoice(rawText: string) {
   const reassessed = useSemanticRows
     ? assessStructuredInvoiceBase(data, rawText, false, carriedIssues)
     : base.extraction;
+  const normalized = normalizeExtraction(data, reassessed, false);
 
   return {
     data,
-    extraction: normalizeExtraction(data, reassessed, false),
+    extraction: guardMissingLineItems(rawText, data, normalized),
   };
 }
 
@@ -292,7 +312,8 @@ export function assessStructuredInvoice(
   extraIssues: string[] = [],
 ) {
   const base = assessStructuredInvoiceBase(data, rawText, false, extraIssues);
-  return normalizeExtraction(data, base, humanConfirmed);
+  const normalized = normalizeExtraction(data, base, humanConfirmed);
+  return humanConfirmed ? normalized : guardMissingLineItems(rawText, data, normalized);
 }
 
 function arithmeticCheckRan(checks: ValidationCheck[]) {
@@ -332,8 +353,6 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
     };
   }
 
-  // A verified exception is useful even when an unrelated extraction field still
-  // needs review. We only withhold a LOW-risk claim until extraction is reliable.
   if (extraction.status !== "reliable") {
     if (failures.length > 0 && enoughBusinessEvidence) {
       return {
