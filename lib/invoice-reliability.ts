@@ -13,7 +13,7 @@ import {
   type ValidationResult,
 } from "@/lib/invoice-engine";
 
-export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.6";
+export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.7";
 
 export type {
   CheckStatus,
@@ -110,8 +110,10 @@ function recoverReorderedTotals(rawText: string) {
   const groupedValues = grouped
     ? [grouped[1], grouped[2], grouped[3]].map((token) => parseMoneyToken(token))
     : [null, null, null];
+  const groupedReliable = Boolean(grouped && groupedValues.every((value) => value !== null));
 
   return {
+    grouped: groupedReliable,
     subtotal: groupedValues[0] !== null
       ? moneyEvidence(groupedValues[0]!, grouped?.[0] || "", 0.95)
       : recoverMoneyAroundLabel(rawText, subtotalLabel),
@@ -142,6 +144,14 @@ function sanitizePoReference(data: InvoiceData): InvoiceData {
 
 function recoverCriticalMoney(rawText: string, data: InvoiceData): InvoiceData {
   const recovered = recoverReorderedTotals(rawText);
+  if (recovered.grouped) {
+    return {
+      ...data,
+      subtotal: recovered.subtotal ?? data.subtotal,
+      vat: recovered.vat ?? data.vat,
+      total: recovered.total ?? data.total,
+    };
+  }
   return {
     ...data,
     subtotal: typeof data.subtotal.value === "number" ? data.subtotal : (recovered.subtotal ?? data.subtotal),
