@@ -6,16 +6,18 @@ function firstForwardedValue(value: string | null) {
   return value?.split(",")[0]?.trim() || "";
 }
 
-export function assertSameOrigin(request: Request) {
+export function assertNotCrossSite(request: Request) {
   const fetchSite = request.headers.get("sec-fetch-site");
-  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "same-site") {
+  if (fetchSite === "cross-site") {
     throw forbidden();
   }
+}
 
-  // Browsers normally send Origin on mutating requests, but navigation-style
-  // form POSTs (such as sign-out) can reach some proxy/runtime combinations
-  // without it. Referer is an acceptable fallback only after the same host is
-  // verified below; requests with neither header remain forbidden.
+export function assertSameOrigin(request: Request) {
+  assertNotCrossSite(request);
+
+  // Browsers normally send Origin on mutating requests. For same-origin form
+  // navigations, Referer is an acceptable fallback after its host is verified.
   const source = request.headers.get("origin") || request.headers.get("referer");
   if (!source) throw forbidden();
 
