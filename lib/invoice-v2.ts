@@ -149,7 +149,6 @@ function makeLineItem(
   rawAmount: string,
   source: string,
   confidence: number,
-  requireArithmetic = false,
 ): LineItem | null {
   const quantity = parseMoney(rawQuantity);
   const unitPrice = parseMoney(rawUnitPrice);
@@ -158,7 +157,6 @@ function makeLineItem(
   if (!cleanDescription || quantity === null || unitPrice === null || amount === null) return null;
   if (quantity <= 0 || unitPrice < 0 || amount < 0) return null;
   const arithmeticOk = close(quantity * unitPrice, amount);
-  if (requireArithmetic && !arithmeticOk) return null;
 
   return {
     description: cleanDescription,
@@ -219,13 +217,55 @@ function parseFlattenedLineItems(text: string): LineItem[] {
     add(makeLineItem(description, candidate[2], candidate[3], candidate[4], candidate[0], 0.93));
   }
 
-  const groupedMoney = String.raw`\d{1,3}(?:[,'’.]\d{3})+(?:[.,]\d{1,2})?`;
-  const collapsedRow = new RegExp(
-    `([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё/&(),.+%µμ°²³:_\\- ]{1,160}?)(\\d{1,6})(${groupedMoney})(${groupedMoney})(?=[A-Za-zА-Яа-яЁё]|$)`,
-    "g",
+  // When a converter removes every cell separator, numeric boundaries can become
+  // ambiguous (for example: "printers2210.00400.00"). Preserve the row instead
+  // of requiring its arithmetic to pass. Arithmetic is used only to choose the
+  // most plausible token split among several formatting-compatible candidates;
+  // a mismatch remains a mismatch and is surfaced by business validation.
+  const fullMoneyToken = new RegExp(`^${moneyToken}$`);
+  const splitCollapsedNumbers = (tail: string) => {
+    let best: { quantity: string; unitPrice: string; amount: string; score: number } | null = null;
+
+    for (let quantityEnd = 1; quantityEnd <= Math.min(6, tail.length - 2); quantityEnd += 1) {
+      const rawQuantity = tail.slice(0, quantityEnd);
+      if (!/^\d+$/.test(rawQuantity)) break;
+      const quantity = Number(rawQuantity);
+      if (!Number.isFinite(quantity) || quantity <= 0) continue;
+
+      for (let amountStart = quantityEnd + 1; amountStart < tail.length; amountStart += 1) {
+        const rawUnitPrice = tail.slice(quantityEnd, amountStart);
+        const rawAmount = tail.slice(amountStart);
+        if (!fullMoneyToken.test(rawUnitPrice) || !fullMoneyToken.test(rawAmount)) continue;
+        // Fully separator-free integer triples cannot be split safely. Require
+        // punctuation in unit price and amount before attempting recovery.
+        if (!/[.,'’]/.test(rawUnitPrice) || !/[.,'’]/.test(rawAmount)) continue;
+
+        const unitPrice = parseMoney(rawUnitPrice);
+        const amount = parseMoney(rawAmount);
+        if (unitPrice === null || amount === null || unitPrice < 0 || amount < 0) continue;
+
+        const relativeArithmeticGap = Math.abs(quantity * unitPrice - amount) / Math.max(1, Math.abs(amount));
+        const leadingZeroPenalty = (/^0\d/.test(rawUnitPrice) ? 0.25 : 0)
+          + (/^0\d/.test(rawAmount) ? 0.25 : 0);
+        const score = relativeArithmeticGap + leadingZeroPenalty;
+        if (!best || score < best.score) {
+          best = { quantity: rawQuantity, unitPrice: rawUnitPrice, amount: rawAmount, score };
+        }
+      }
+    }
+
+    return best;
+  };
+
+  const collapsedSection = section.replace(
+    new RegExp(`(\\d)\\s*${currencyToken}\\s*(?=\\d|[A-Za-zА-Яа-яЁё]|$)`, "gi"),
+    "$1",
   );
-  for (const candidate of section.matchAll(collapsedRow)) {
-    add(makeLineItem(candidate[1], candidate[2], candidate[3], candidate[4], candidate[0], 0.9, true));
+  const collapsedRow = /([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё/&(),.+%µμ°²³:_\- ]{1,160}?)([0-9][0-9.,'’]{2,80})(?=[A-Za-zА-Яа-яЁё]|$)/g;
+  for (const candidate of collapsedSection.matchAll(collapsedRow)) {
+    const split = splitCollapsedNumbers(candidate[2]);
+    if (!split) continue;
+    add(makeLineItem(candidate[1], split.quantity, split.unitPrice, split.amount, candidate[0], 0.82));
   }
 
   return items.slice(0, 500);
@@ -257,7 +297,7 @@ export function extractInvoice(rawText: string): InvoiceData {
   const poNumber = capturePattern(text, /(?:PURCHASE\s+ORDER|P\.?\s*O\.?|PO|ЗАКАЗ)(?:\s*(?:NUMBER|NO\.?|#|№))?(?:\s*\/\s*(?:PURCHASE\s+ORDER|P\.?\s*O\.?|PO|ЗАКАЗ)(?:\s*(?:NUMBER|NO\.?|#|№))?)?\s*[:：-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})(?=\s|$)/i, 0.95);
 
   const subtotal = captureMoney(text, "SUBTOTAL|ИТОГО\\s+БЕЗ\\s+НДС|ПРОМЕЖУТОЧНЫЙ\\s+ИТОГ|БЕЗ\\s+НДС", 0.97);
-  const vat = captureMoney(text, "VAT(?:\\s*\\d{1,2}\\s*%)?|НДС(?:\\s*\\d{1,2}\\s*%)?", 0.97);
+  const vat = captureMoney(text, "VAT(?:\\s*\\d{1,2}\\s*%)?|(?<!БЕЗ\\s)НДС(?:\\s*\\d{1,2}\\s*%)?", 0.97);
   const total = captureMoney(text, "GRAND\\s+TOTAL|TOTAL\\s+DUE|ИТОГО\\s+К\\s+ОПЛАТЕ|ВСЕГО\\s+К\\s+ОПЛАТЕ|ИТОГО|TOTAL", 0.98);
   const currency = parseCurrency(text);
   const flattenedItems = parseFlattenedLineItems(text);
