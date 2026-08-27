@@ -152,7 +152,8 @@ function saneLineItem(item: LineItem) {
   if (item.amount === null || !Number.isFinite(item.amount) || item.amount < 0 || item.amount >= 1e15) return false;
   if (item.quantity !== null && (!Number.isFinite(item.quantity) || item.quantity <= 0 || item.quantity >= 1e9)) return false;
   if (item.unit_price !== null && (!Number.isFinite(item.unit_price) || item.unit_price < 0 || item.unit_price >= 1e15)) return false;
-  if (item.quantity !== null && item.unit_price !== null && !close(item.quantity * item.unit_price, item.amount)) return false;
+  // Structural extraction must preserve business exceptions. A row where
+  // quantity × unit price != amount is still a real row and is validated later.
   return true;
 }
 
@@ -219,13 +220,17 @@ function reconcileLineItems(
 
 function invoiceLike(rawText: string) {
   const text = rawText.normalize("NFKC");
-  const title = /(?:^|\n|\r|\s)(?:invoice|сч[её]т(?:-фактура)?)(?:\s|$|[:#№])/i.test(text);
+  const boundary = String.raw`(?:^|[^A-Za-zА-Яа-яЁё0-9])`;
+  const endBoundary = String.raw`(?=$|[^A-Za-zА-Яа-яЁё0-9])`;
+  const has = (pattern: string) => new RegExp(`${boundary}(?:${pattern})${endBoundary}`, "i").test(text);
+
+  const title = has(String.raw`invoice|сч[её]т(?:-фактура)?`);
   const businessLabels = [
-    /\b(?:supplier|поставщик)\b/i,
-    /\b(?:invoice\s*(?:number|no\.?|#|№)|сч[её]т\s*(?:номер|no\.?|#|№))\b/i,
-    /\b(?:subtotal|итого\s+без\s+ндс|total|итого)\b/i,
-    /\b(?:description|qty|quantity|amount|unit\s*price)\b/i,
-  ].filter((pattern) => pattern.test(text)).length;
+    String.raw`supplier|поставщик`,
+    String.raw`invoice\s*(?:number|no\.?|#|№)|сч[её]т\s*(?:номер|no\.?|#|№)`,
+    String.raw`subtotal|итого\s+без\s+ндс|total|итого`,
+    String.raw`description|описание|qty|quantity|кол-?во|количество|amount|сумма|unit\s*price|цена`,
+  ].filter(has).length;
   return title && businessLabels >= 2;
 }
 
