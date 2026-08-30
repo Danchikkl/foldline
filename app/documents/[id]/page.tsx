@@ -6,8 +6,8 @@ import type { InvoiceData } from "@/lib/invoice";
 import {
   analyzeInvoice,
   INVOICE_ENGINE_VERSION,
-  type ValidationResult,
-} from "@/lib/invoice-reliability";
+} from "@/lib/invoice-runtime";
+import type { ValidationResult } from "@/lib/invoice-reliability";
 import { validateInvoiceForDocument } from "@/lib/invoice-history";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { DocumentReview } from "@/components/document-review";
@@ -41,18 +41,19 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
       data: analysis.data,
       extraction: analysis.extraction,
     });
+    const versionedValidation = { ...validation, engine_version: INVOICE_ENGINE_VERSION };
 
     document = {
       ...document,
       extracted_data: analysis.data,
-      validation_data: validation,
+      validation_data: versionedValidation,
     };
 
     try {
       const admin = createAdminClient();
       await admin
         .from("documents")
-        .update({ extracted_data: analysis.data, validation_data: validation })
+        .update({ extracted_data: analysis.data, validation_data: versionedValidation })
         .eq("id", id)
         .eq("owner_id", user.id);
     } catch (error) {
@@ -67,7 +68,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
       extraction: existingValidation?.extraction,
       humanConfirmed: document.status === "reviewed",
     });
-    document = { ...document, validation_data: validation };
+    document = { ...document, validation_data: { ...validation, engine_version: INVOICE_ENGINE_VERSION } };
   }
 
   return (
