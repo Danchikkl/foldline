@@ -1,4 +1,5 @@
-import { analyzeInvoice, validateInvoiceBusiness } from "../lib/invoice-reliability";
+import { analyzeInvoice } from "../lib/invoice-runtime";
+import { validateInvoiceBusiness } from "../lib/invoice-reliability";
 import { runInvoiceReliabilityFixtures } from "../lib/invoice-reliability-fixtures";
 
 const results = runInvoiceReliabilityFixtures();
@@ -70,6 +71,56 @@ expect(
   `Expected total=59000 and verified high-risk totals failure; got total=${String(mismatchAnalysis.data.total.value)}, risk=${mismatchValidation.risk_level}.`,
 );
 
+const markdownTableMismatch = `
+INVOICE
+| SUPPLIER | Steppe Tech Trade |
+| BIN / IIN | 987654321098 |
+| INVOICE NUMBER | ST-4407-MARKDOWN |
+| DATE | 13.08.2026 |
+| CURRENCY | KZT |
+| Description | Qty | Unit price | Amount |
+| --- | ---: | ---: | ---: |
+| USB-C hubs | 10 | 3,000 | 30,000 |
+| Wireless keyboards | 4 | 5,000 | 20,000 |
+| Subtotal | VAT | TOTAL |
+| 50,000 KZT | 6,000 KZT | 59,000 KZT |
+`;
+const markdownMismatchAnalysis = analyzeInvoice(markdownTableMismatch);
+const markdownMismatchValidation = validateInvoiceBusiness(markdownMismatchAnalysis.data, {
+  extraction: markdownMismatchAnalysis.extraction,
+  duplicateInvoice: null,
+});
+expect(
+  "Markdown totals row preserves mismatch",
+  markdownMismatchAnalysis.data.subtotal.value === 50000
+    && markdownMismatchAnalysis.data.vat.value === 6000
+    && markdownMismatchAnalysis.data.total.value === 59000
+    && markdownMismatchValidation.checks.some((check) => check.id === "totals" && check.status === "fail"),
+  `Expected markdown totals 50000/6000/59000; got ${String(markdownMismatchAnalysis.data.subtotal.value)}/${String(markdownMismatchAnalysis.data.vat.value)}/${String(markdownMismatchAnalysis.data.total.value)}.`,
+);
+
+const gluedTotals = `
+INVOICE
+SUPPLIER Steppe Tech Trade
+INVOICE NUMBER ST-GLUED-1
+CURRENCY KZT
+Description Qty Unit price Amount
+USB-C hubs 10 3,000 30,000
+Wireless keyboards 4 5,000 20,000
+Subtotal50,000KZTVAT6,000KZTTOTAL59,000KZT
+`;
+const gluedAnalysis = analyzeInvoice(gluedTotals);
+const gluedValidation = validateInvoiceBusiness(gluedAnalysis.data, {
+  extraction: gluedAnalysis.extraction,
+  duplicateInvoice: null,
+});
+expect(
+  "Glued converter totals are recovered",
+  gluedAnalysis.data.total.value === 59000
+    && gluedValidation.checks.some((check) => check.id === "totals" && check.status === "fail"),
+  `Expected glued total=59000 and totals failure; got total=${String(gluedAnalysis.data.total.value)}.`,
+);
+
 const falsePo = `
 INVOICE
 SUPPLIER Qazaq Office Supply LLP
@@ -107,6 +158,19 @@ expect(
   nonInvoiceAnalysis.extraction.status === "unsupported"
     && nonInvoiceValidation.risk_level === "not_calculated",
   `Expected unsupported/not_calculated, got ${nonInvoiceAnalysis.extraction.status}/${nonInvoiceValidation.risk_level}.`,
+);
+
+const weakNonInvoice = `
+PROJECT NOTES
+Meeting agenda for the product team.
+Discuss invoice parser QA, dashboard usability, launch timing and pilot interviews.
+No payable document is attached.
+`;
+const weakNonInvoiceAnalysis = analyzeInvoice(weakNonInvoice);
+expect(
+  "Document mentioning invoice without invoice structure is unsupported",
+  weakNonInvoiceAnalysis.extraction.status === "unsupported",
+  `Expected unsupported, got ${weakNonInvoiceAnalysis.extraction.status}.`,
 );
 
 if (results.some((result) => !result.passed) || regressionFailed) process.exit(1);
