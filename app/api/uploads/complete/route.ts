@@ -5,7 +5,7 @@ import { assertSameOrigin, jsonError } from "@/lib/http";
 import { deleteDocumentObject, getDocumentInfo } from "@/lib/storage";
 import { MAX_UPLOAD_BYTES } from "@/lib/constants";
 import { extractDocumentMarkdown } from "@/lib/ocr";
-import { analyzeInvoice } from "@/lib/invoice-reliability";
+import { analyzeInvoice, INVOICE_ENGINE_VERSION } from "@/lib/invoice-runtime";
 import { validateInvoiceForDocument } from "@/lib/invoice-history";
 
 const schema = z.object({ documentId: z.string().uuid() });
@@ -93,6 +93,7 @@ export async function POST(request: Request) {
         data: analysis.data,
         extraction: analysis.extraction,
       });
+      const versionedValidation = { ...validation, engine_version: INVOICE_ENGINE_VERSION };
       const processedAt = new Date().toISOString();
 
       const { error: documentUpdateError } = await admin
@@ -101,7 +102,7 @@ export async function POST(request: Request) {
           status: "ready",
           raw_ocr_text: markdown,
           extracted_data: analysis.data,
-          validation_data: validation,
+          validation_data: versionedValidation,
           error_message: null,
           processed_at: processedAt,
         })
@@ -119,8 +120,8 @@ export async function POST(request: Request) {
         ok: true,
         status: "ready",
         extractedCharacters: markdown.length,
-        extractionStatus: validation.extraction.status,
-        riskLevel: validation.risk_level,
+        extractionStatus: versionedValidation.extraction.status,
+        riskLevel: versionedValidation.risk_level,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Document conversion failed.";
