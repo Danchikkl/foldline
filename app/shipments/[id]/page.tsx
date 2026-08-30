@@ -10,6 +10,41 @@ export const metadata: Metadata = { robots: { index: false, follow: false } };
 
 type Props = { params: Promise<{ id: string }> };
 
+type DocumentValidation = {
+  extraction?: { status?: string };
+  risk_level?: string;
+};
+
+function documentOutcome(document: { status: string; validation_data?: unknown }) {
+  if (["uploading", "queued", "processing"].includes(document.status)) {
+    return { label: "Processing", className: "status-processing" };
+  }
+  if (document.status === "failed") {
+    return { label: "Processing failed", className: "status-failed" };
+  }
+
+  const validation = document.validation_data as DocumentValidation | null | undefined;
+  const extractionStatus = validation?.extraction?.status;
+  const riskLevel = validation?.risk_level;
+
+  if (extractionStatus === "unsupported") {
+    return { label: "Not an invoice", className: "" };
+  }
+  if (riskLevel === "high" || riskLevel === "medium") {
+    return { label: "Issue found", className: "status-failed" };
+  }
+  if (extractionStatus === "needs_review" || riskLevel === "not_calculated") {
+    return { label: "Requires review", className: "status-processing" };
+  }
+  if (extractionStatus === "reliable" && riskLevel === "low") {
+    return { label: "Checked", className: "status-ready" };
+  }
+
+  // A document that finished processing but has no usable validation result
+  // should never look "green" merely because its storage status is ready.
+  return { label: "Requires review", className: "status-processing" };
+}
+
 export default async function ShipmentPage({ params }: Props) {
   const { id } = await params;
   const { user, supabase } = await requireUser();
@@ -25,7 +60,7 @@ export default async function ShipmentPage({ params }: Props) {
   const [{ data: documents }, { data: discrepancies }] = await Promise.all([
     supabase
       .from("documents")
-      .select("id,original_filename,status,document_type,created_at")
+      .select("id,original_filename,status,document_type,validation_data,created_at")
       .eq("shipment_id", id)
       .order("created_at", { ascending: true }),
     supabase
@@ -65,13 +100,16 @@ export default async function ShipmentPage({ params }: Props) {
         <section className="documentsSection">
           <div className="sectionHeader"><h2>Documents</h2><span>{documents?.length ?? 0} total</span></div>
           <div className="documentList">
-            {documents?.length ? documents.map((d: any) => (
-              <Link href={`/documents/${d.id}`} className="documentRow" key={d.id}>
-                <div className="docIcon"><FileText/></div>
-                <div className="docName"><b>{d.original_filename}</b><span>{d.document_type ? d.document_type.replaceAll("_", " ") : "Type not verified"}</span></div>
-                <span className={`status status-${d.status}`}>{d.status}</span>
-              </Link>
-            )) : <div className="emptyList">No documents yet. The reliable review workflow currently starts with an invoice.</div>}
+            {documents?.length ? documents.map((d: any) => {
+              const outcome = documentOutcome(d);
+              return (
+                <Link href={`/documents/${d.id}`} className="documentRow" key={d.id}>
+                  <div className="docIcon"><FileText/></div>
+                  <div className="docName"><b>{d.original_filename}</b><span>{d.document_type ? d.document_type.replaceAll("_", " ") : "Type not verified"}</span></div>
+                  <span className={`status ${outcome.className}`.trim()}>{outcome.label}</span>
+                </Link>
+              );
+            }) : <div className="emptyList">No documents yet. The reliable review workflow currently starts with an invoice.</div>}
           </div>
         </section>
 
