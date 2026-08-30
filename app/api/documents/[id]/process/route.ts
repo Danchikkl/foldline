@@ -14,7 +14,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const { data: doc } = await supabase
     .from("documents")
-    .select("id,storage_key,original_filename,content_type,status,error_message,organization_id")
+    .select("id,storage_key,original_filename,content_type,status,error_message,organization_id,shipment_id")
     .eq("id", id)
     .maybeSingle();
   if (!doc) return jsonError("Not found", 404);
@@ -64,6 +64,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const validation = await validateInvoiceForDocument({
       documentId: id,
       organizationId: doc.organization_id,
+      shipmentId: doc.shipment_id,
       data: analysis.data,
       extraction: analysis.extraction,
     });
