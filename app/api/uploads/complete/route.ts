@@ -21,7 +21,7 @@ export async function POST(request: Request) {
 
   const { data: doc } = await supabase
     .from("documents")
-    .select("id,storage_key,original_filename,content_type,size_bytes,status,organization_id")
+    .select("id,storage_key,original_filename,content_type,size_bytes,status,organization_id,shipment_id")
     .eq("id", parsed.data.documentId)
     .maybeSingle();
 
@@ -90,6 +90,7 @@ export async function POST(request: Request) {
       const validation = await validateInvoiceForDocument({
         documentId: doc.id,
         organizationId: doc.organization_id,
+        shipmentId: doc.shipment_id,
         data: analysis.data,
         extraction: analysis.extraction,
       });
