@@ -17,10 +17,21 @@ export async function POST(request: Request) {
 
   const { data: sub } = await supabase.from("subscriptions").select("plan").eq("user_id", user.id).maybeSingle();
   const plan = sub?.plan === "pro" ? "pro" : "free";
-  const start = new Date();
-  start.setUTCDate(1); start.setUTCHours(0, 0, 0, 0);
-  const { count } = await supabase.from("documents").select("id", { count: "exact", head: true }).gte("created_at", start.toISOString());
-  if ((count ?? 0) >= PLAN_LIMITS[plan]) return jsonError("Monthly document limit reached. Upgrade or wait for the next cycle.", 402);
+  const monthlyLimit = PLAN_LIMITS[plan];
+
+  if (monthlyLimit !== null) {
+    const start = new Date();
+    start.setUTCDate(1);
+    start.setUTCHours(0, 0, 0, 0);
+    const { count } = await supabase
+      .from("documents")
+      .select("id", { count: "exact", head: true })
+      .gte("created_at", start.toISOString());
+
+    if ((count ?? 0) >= monthlyLimit) {
+      return jsonError("Monthly document limit reached. Upgrade or wait for the next cycle.", 402);
+    }
+  }
 
   const admin = createAdminClient();
   let organizationId: string | null = null;
