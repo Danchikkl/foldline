@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, Download, Eye, EyeOff, Plus, Save, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, Download, Eye, EyeOff, Plus, Save, ShieldCheck, Trash2 } from "lucide-react";
 import type { InvoiceData } from "@/lib/invoice";
 import type { CheckStatus, ValidationResult } from "@/lib/invoice-reliability";
 
@@ -24,7 +24,6 @@ const labels: Record<string, string> = {
   supplier_name: "Supplier",
   supplier_bin: "BIN / IIN",
   invoice_number: "Invoice #",
-  po_number: "PO #",
   invoice_date: "Date",
   currency: "Currency",
   subtotal: "Subtotal",
@@ -39,13 +38,12 @@ async function readJsonSafely<T extends { error?: string }>(response: Response):
   catch { return { error: text || `Request failed with status ${response.status}.` } as T; }
 }
 
-function riskTitle(validation: ValidationResult | null) {
+function resultTitle(validation: ValidationResult | null) {
   if (!validation) return "Review pending";
-  if (validation.extraction.status === "unsupported") return "Unsupported document";
-  if (validation.risk_level === "not_calculated") return "Needs review before risk is calculated";
-  if (validation.risk_level === "high") return "High risk";
-  if (validation.risk_level === "medium") return "Needs attention";
-  return "Low risk";
+  if (validation.extraction.status === "unsupported") return "Not an invoice";
+  if (validation.risk_level === "high" || validation.risk_level === "medium") return "Issue found";
+  if (validation.extraction.status === "needs_review" || validation.risk_level === "not_calculated") return "Review needed";
+  return "Checked";
 }
 
 function checkDot(status: CheckStatus) {
@@ -125,6 +123,11 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
     return topFields.filter((key) => validation.needs_review.includes(key));
   }, [exceptionsOnly, validation]);
 
+  const visibleChecks = useMemo(
+    () => (validation?.checks || []).filter((check) => check.id !== "po-number"),
+    [validation],
+  );
+
   function editField(key: string, value: string) {
     if (!data) return;
     const old = data[key as keyof InvoiceData] as { value: unknown; confidence: number; evidence: string };
@@ -193,7 +196,7 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
   }
 
   if (["uploading", "queued", "processing"].includes(status)) {
-    return <div className="processingPage"><div className="processingOrb"/><span className="eyebrow">Document pipeline</span><h1>Reading {doc.original_filename}</h1><p>We verify the upload, extract the document and run business checks only when the extraction is reliable enough.</p><div className="pipeline"><span className="done">Uploaded</span><i/><span className={status !== "uploading" ? "done" : ""}>Verified</span><i/><span className={status === "processing" ? "active" : ""}>Extraction</span><i/><span>Checks</span></div></div>;
+    return <div className="processingPage"><div className="processingOrb"/><span className="eyebrow">Invoice check</span><h1>Reading {doc.original_filename}</h1><p>Foldline reads the invoice first, then runs checks only on values it can verify.</p><div className="pipeline"><span className="done">Uploaded</span><i/><span className={status !== "uploading" ? "done" : ""}>Verified</span><i/><span className={status === "processing" ? "active" : ""}>Reading</span><i/><span>Checks</span></div></div>;
   }
 
   if (status === "failed") {
@@ -203,26 +206,27 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
 
   const extractionNeedsReview = validation?.extraction.status === "needs_review";
   const unsupported = validation?.extraction.status === "unsupported";
+  const verifiedIssue = validation?.risk_level === "medium" || validation?.risk_level === "high";
   const qualityStyle = unsupported
     ? { border: "1px solid #e3aaa6", background: "#fff0ef", color: "#7f2f2b", borderRadius: 10, padding: 12, margin: "14px 0" }
     : { border: "1px solid #e3cf91", background: "#fff8e6", color: "#6f5516", borderRadius: 10, padding: 12, margin: "14px 0" };
 
   return <div className="reviewPage">
-    <header className="reviewHeader"><div><span className="eyebrow">Proofline review</span><h1>{doc.original_filename}</h1></div><div className="reviewActions"><button className="button buttonGhost" onClick={() => setProof(!proof)}>{proof ? <EyeOff size={16}/> : <Eye size={16}/>} {proof ? "Hide proof" : "Show proof"}</button><a className="button buttonGhost" href={`/api/documents/${doc.id}/export`}><Download size={16}/>CSV</a><button className="button buttonDark" disabled={saving} onClick={() => void save("save")}><Save size={16}/>Save</button><button className="button buttonAccent" disabled={saving || unsupported} onClick={() => void save("approve")}><Check size={16}/>Approve after review</button></div></header>
+    <header className="reviewHeader"><div><span className="eyebrow">Invoice review</span><h1>{doc.original_filename}</h1></div><div className="reviewActions"><button className="button buttonGhost" onClick={() => setProof(!proof)}>{proof ? <EyeOff size={16}/> : <Eye size={16}/>} {proof ? "Hide proof" : "Show proof"}</button><a className="button buttonGhost" href={`/api/documents/${doc.id}/export`}><Download size={16}/>CSV</a><button className="button buttonDark" disabled={saving} onClick={() => void save("save")}><Save size={16}/>Save</button><button className="button buttonAccent" disabled={saving || unsupported} onClick={() => void save("approve")}><Check size={16}/>Approve after review</button></div></header>
     {message && <div className="inlineNotice">{message}</div>}
     <div className="reviewGrid"><section className="previewPanel"><div className="panelTitle"><span>Original</span><span className="secureTag"><ShieldCheck size={14}/>private signed URL</span></div>{fileUrl ? (doc.content_type === "application/pdf" ? <iframe title="Original document" src={fileUrl}/> : <img src={fileUrl} alt="Original document"/>) : <div className="previewLoading">Generating secure preview…</div>}</section>
     <section className="dataPanel">
-      <div className="proofToolbar"><div><span className="eyebrow"><Sparkles size={13}/> Review by exception</span><h2>{riskTitle(validation)}</h2>{validation && <p style={{ margin: "5px 0 0", fontSize: 10, color: "#737985" }}>{validation.summary}</p>}</div><label className="switchLabel"><input type="checkbox" checked={exceptionsOnly} onChange={(e)=>setExceptionsOnly(e.target.checked)}/><span/>Only show exceptions</label></div>
+      <div className="proofToolbar"><div><span className="eyebrow">Invoice check</span><h2>{resultTitle(validation)}</h2>{validation && <p style={{ margin: "5px 0 0", fontSize: 10, color: "#737985" }}>{validation.summary}</p>}</div><label className="switchLabel"><input type="checkbox" checked={exceptionsOnly} onChange={(e)=>setExceptionsOnly(e.target.checked)}/><span/>Only show exceptions</label></div>
 
-      {validation && validation.extraction.status !== "reliable" && <div style={qualityStyle}><strong>{unsupported ? "Current invoice workflow cannot verify this document." : "Risk is intentionally not calculated yet."}</strong><p style={{ fontSize: 10, lineHeight: 1.5 }}>{unsupported ? "Foldline will not invent invoice results for an unsupported file." : "The extraction did not pass the reliability gate. Compare the fields with the source, correct anything necessary, then approve after review."}</p>{validation.extraction.issues.length > 0 && <ul style={{ marginBottom: 0, paddingLeft: 18, fontSize: 9, lineHeight: 1.6 }}>{validation.extraction.issues.map((issue, index)=><li key={`${issue}-${index}`}>{issue}</li>)}</ul>}</div>}
+      {validation && validation.extraction.status !== "reliable" && <div style={qualityStyle}><strong>{unsupported ? "Foldline does not recognize this as a supported invoice." : verifiedIssue ? "A verified issue was found, but some fields still need review." : "Foldline could not verify every required field."}</strong><p style={{ fontSize: 10, lineHeight: 1.5 }}>{unsupported ? "No invoice result was invented for this document." : verifiedIssue ? "The issue below is based on values Foldline could verify. Other uncertain fields are listed separately." : "No clean result is claimed until the required fields can be read reliably or confirmed by a person."}</p>{validation.extraction.issues.length > 0 && <ul style={{ marginBottom: 0, paddingLeft: 18, fontSize: 9, lineHeight: 1.6 }}>{validation.extraction.issues.map((issue, index)=><li key={`${issue}-${index}`}>{issue}</li>)}</ul>}</div>}
 
-      {validation && <div className="checks">{validation.checks.map((c)=><div key={c.id} className={`check check-${c.status}`}><span className="checkDot" style={{ background: checkDot(c.status) }}/><div><strong>{c.label}</strong><p>{c.message}</p></div></div>)}</div>}
+      {validation && <div className="checks">{visibleChecks.map((c)=><div key={c.id} className={`check check-${c.status}`}><span className="checkDot" style={{ background: checkDot(c.status) }}/><div><strong>{c.label}</strong><p>{c.message}</p></div></div>)}</div>}
 
-      <div className="fieldStack">{visibleFields.length === 0 && <div className="allClear"><Check size={20}/><div><strong>{validation?.risk_level === "low" ? "Verified checks passed." : "No flagged fields."}</strong><p>Turn off “Only show exceptions” to inspect every extracted field.</p></div></div>}{visibleFields.map((key)=>{ const field=data[key as keyof InvoiceData] as { value: string | number | null; confidence: number; evidence: string }; return <div className="proofField" key={key}><div className="fieldLabel"><label htmlFor={key}>{labels[key]}</label><span className={`confidence ${field.confidence >= .85 ? "high" : field.confidence >= .7 ? "mid" : "low"}`}>{Math.round(field.confidence*100)}% extraction</span></div><input id={key} value={field.value ?? ""} onChange={(e)=>editField(key,e.target.value)}/>{proof && field.evidence && <div className="evidence"><span>Evidence</span>{field.evidence}</div>}</div>})}</div>
+      <div className="fieldStack">{visibleFields.length === 0 && <div className="allClear"><Check size={20}/><div><strong>{validation?.risk_level === "low" ? "Verified checks passed." : "No flagged fields."}</strong><p>Turn off “Only show exceptions” to inspect every extracted field.</p></div></div>}{visibleFields.map((key)=>{ const field=data[key as keyof InvoiceData] as { value: string | number | null; confidence: number; evidence: string }; return <div className="proofField" key={key}><div className="fieldLabel"><label htmlFor={key}>{labels[key]}</label><span className={`confidence ${field.confidence >= .85 ? "high" : field.confidence >= .7 ? "mid" : "low"}`}>{field.confidence >= .85 ? "verified extraction" : field.confidence >= .7 ? "check extraction" : "uncertain extraction"}</span></div><input id={key} value={field.value ?? ""} onChange={(e)=>editField(key,e.target.value)}/>{proof && field.evidence && <div className="evidence"><span>Evidence</span>{field.evidence}</div>}</div>})}</div>
 
       <div className="lineItemsHeader"><h3>Line items</h3><div style={{ display: "flex", alignItems: "center", gap: 8 }}><span>{data.line_items.length} row{data.line_items.length === 1 ? "" : "s"}</span><button className="button buttonGhost" style={{ padding: "6px 8px", fontSize: 9 }} onClick={addLineItem}><Plus size={12}/>Add row</button></div></div>
       <div className="lineTable"><div className="lineRow lineHead"><span>Description</span><span>Qty</span><span>Unit</span><span>Amount</span></div>{data.line_items.map((item,i)=><div style={{ position: "relative" }} key={i}><div className="lineRow"><input value={item.description} onChange={(e)=>editLineItem(i,{description:e.target.value})}/><input inputMode="decimal" value={item.quantity ?? ""} onChange={(e)=>editLineItem(i,{quantity:numberOrNull(e.target.value)})}/><input inputMode="decimal" value={item.unit_price ?? ""} onChange={(e)=>editLineItem(i,{unit_price:numberOrNull(e.target.value)})}/><input inputMode="decimal" value={item.amount ?? ""} onChange={(e)=>editLineItem(i,{amount:numberOrNull(e.target.value)})}/></div><button type="button" aria-label={`Remove line item ${i + 1}`} title="Remove row" onClick={()=>removeLineItem(i)} style={{ position:"absolute", right:4, top:4, border:0, background:"transparent", cursor:"pointer", padding:2, opacity:.55 }}><Trash2 size={11}/></button></div>)}</div>
-      {extractionNeedsReview && <div style={{ marginTop: 14, padding: 11, borderRadius: 9, background: "#f0eee7", fontSize: 10 }}><strong>Why no percentage?</strong><p style={{ marginBottom: 0 }}>Extraction uncertainty is not business risk. Foldline withholds the risk result until enough fields are reliable or a person confirms the document.</p></div>}
+      {extractionNeedsReview && !verifiedIssue && <div style={{ marginTop: 14, padding: 11, borderRadius: 9, background: "#f0eee7", fontSize: 10 }}><strong>Why review is needed</strong><p style={{ marginBottom: 0 }}>Foldline could not verify enough of the invoice to claim that the checks passed. Review the uncertain fields against the original document.</p></div>}
     </section></div>
   </div>;
 }
