@@ -61,7 +61,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!user) return jsonError("Unauthorized", 401);
   const { data: owned } = await supabase
     .from("documents")
-    .select("id,status,organization_id")
+    .select("id,status,organization_id,shipment_id")
     .eq("id", id)
     .maybeSingle();
   if (!owned) return jsonError("Not found.", 404);
@@ -74,6 +74,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const validation = await validateInvoiceForDocument({
     documentId: id,
     organizationId: owned.organization_id,
+    shipmentId: owned.shipment_id,
     data: parsed.data.extracted,
     humanConfirmed,
   });
