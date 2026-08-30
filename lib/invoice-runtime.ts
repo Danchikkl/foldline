@@ -5,7 +5,7 @@ import {
   type ExtractionAssessment,
 } from "@/lib/invoice-reliability";
 
-export const INVOICE_ENGINE_VERSION = "invoice-runtime-2026-08-30.2";
+export const INVOICE_ENGINE_VERSION = "invoice-runtime-2026-08-30.3";
 
 const MONEY = String.raw`(?:\d{1,3}(?:[\s,'’.]\d{3})+|\d+(?:[.,]\d{1,2})?)`;
 const CURRENCY = String.raw`(?:KZT|USD|EUR|RUB|₸|\$|€|₽)`;
@@ -77,8 +77,15 @@ function escaped(label: string) {
   return label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, String.raw`\s*`);
 }
 
+function normalizeConverterText(rawText: string) {
+  return rawText
+    .normalize("NFKC")
+    .replace(/\u00a0/g, " ")
+    .replace(/(KZT|USD|EUR|RUB)(?=(?:SUBTOTAL|NET|VAT|TAX|TOTAL|GRAND|AMOUNT|INVOICE|ИТОГО|НДС|К\s*ОПЛАТЕ))/gi, "$1 ");
+}
+
 function findDirectAmount(rawText: string, labels: string[]) {
-  const text = rawText.normalize("NFKC").replace(/\u00a0/g, " ");
+  const text = normalizeConverterText(rawText);
   for (const label of labels) {
     const labelPattern = escaped(label);
     const regex = new RegExp(
@@ -135,9 +142,7 @@ function recoverTableTotals(rawText: string) {
 }
 
 function recoverGroupedTotals(rawText: string) {
-  const flat = rawText
-    .normalize("NFKC")
-    .replace(/\u00a0/g, " ")
+  const flat = normalizeConverterText(rawText)
     .replace(/[*_`#|\t]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -145,13 +150,29 @@ function recoverGroupedTotals(rawText: string) {
   const subtotal = String.raw`(?:SUBTOTAL|NET\s*TOTAL|NET\s*AMOUNT|ИТОГО\s*БЕЗ\s*НДС|ПРОМЕЖУТОЧНЫЙ\s*ИТОГ)`;
   const vat = String.raw`(?:VAT(?:\s*\d{1,2}\s*%)?|TAX(?:\s*\d{1,2}\s*%)?|НДС(?:\s*\d{1,2}\s*%)?)`;
   const total = String.raw`(?:GRAND\s*TOTAL|TOTAL\s*DUE|AMOUNT\s*DUE|INVOICE\s*TOTAL|ИТОГО\s*К\s*ОПЛАТЕ|ВСЕГО\s*К\s*ОПЛАТЕ|К\s*ОПЛАТЕ|TOTAL|ИТОГО)`;
-  const separator = String.raw`[^0-9A-ZА-ЯЁ]{0,12}`;
+  const soft = String.raw`[^0-9A-ZА-ЯЁ]{0,12}`;
 
-  const regex = new RegExp(
-    `${subtotal}${separator}${vat}${separator}${total}${separator}(${MONEY})(?:\\s*${CURRENCY})?${separator}(${MONEY})(?:\\s*${CURRENCY})?${separator}(${MONEY})(?:\\s*${CURRENCY})?`,
+  const alternating = new RegExp(
+    `${subtotal}${soft}(${MONEY})(?:\\s*${CURRENCY})?${soft}${vat}${soft}(${MONEY})(?:\\s*${CURRENCY})?${soft}${total}${soft}(${MONEY})(?:\\s*${CURRENCY})?`,
     "i",
   );
-  const match = flat.match(regex);
+  const alternatingMatch = flat.match(alternating);
+  if (alternatingMatch) {
+    const values = [alternatingMatch[1], alternatingMatch[2], alternatingMatch[3]].map(parseMoney);
+    if (values.every((value) => value !== null)) {
+      return {
+        subtotal: evidence(values[0]!, alternatingMatch[0], 0.96),
+        vat: evidence(values[1]!, alternatingMatch[0], 0.96),
+        total: evidence(values[2]!, alternatingMatch[0], 0.96),
+      };
+    }
+  }
+
+  const headerThenValues = new RegExp(
+    `${subtotal}${soft}${vat}${soft}${total}${soft}(${MONEY})(?:\\s*${CURRENCY})?${soft}(${MONEY})(?:\\s*${CURRENCY})?${soft}(${MONEY})(?:\\s*${CURRENCY})?`,
+    "i",
+  );
+  const match = flat.match(headerThenValues);
   if (!match) return {} as Partial<Record<"subtotal" | "vat" | "total", EvidenceValue>>;
   const values = [match[1], match[2], match[3]].map(parseMoney);
   if (values.some((value) => value === null)) return {} as Partial<Record<"subtotal" | "vat" | "total", EvidenceValue>>;
