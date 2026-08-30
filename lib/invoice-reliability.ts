@@ -13,7 +13,7 @@ import {
   type ValidationResult,
 } from "@/lib/invoice-engine";
 
-export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-27.8";
+export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-30.1";
 
 export type {
   CheckStatus,
@@ -69,25 +69,56 @@ function parseMoneyToken(raw: string) {
 
 const moneyToken = String.raw`(?:\d{1,3}(?:[\s,'’.]\d{3})+|\d+(?:[.,]\d{1,2})?)`;
 const currencyToken = String.raw`(?:KZT|USD|EUR|RUB|₸|\$|€|₽)`;
+const subtotalLabel = String.raw`(?:SUBTOTAL|NET\s+TOTAL|NET\s+AMOUNT|ИТОГО\s+БЕЗ\s+НДС|ПРОМЕЖУТОЧНЫЙ\s+ИТОГ)`;
+const vatLabel = String.raw`(?:VAT(?:\s*\d{1,2}\s*%)?|TAX(?:\s*\d{1,2}\s*%)?|НДС(?:\s*\d{1,2}\s*%)?)`;
+const totalLabel = String.raw`(?:GRAND\s+TOTAL|TOTAL\s+DUE|AMOUNT\s+DUE|INVOICE\s+TOTAL|ИТОГО\s+К\s+ОПЛАТЕ|ВСЕГО\s+К\s+ОПЛАТЕ|К\s+ОПЛАТЕ|TOTAL|ИТОГО)`;
 
 function moneyEvidence(value: number, source: string, confidence = 0.94): EvidenceValue {
   return { value, confidence, evidence: compact(source).slice(0, 500) };
 }
 
+function converterLine(value: string) {
+  return compact(value.normalize("NFKC").replace(/\u00a0/g, " ").replace(/[|\t]/g, " ").replace(/[*_`#]+/g, " "));
+}
+
 function recoverMoneyAroundLabel(rawText: string, labelPattern: string): EvidenceValue | null {
   const text = rawText.normalize("NFKC").replace(/\u00a0/g, " ");
-  const lines = text.split(/\r?\n/).map(compact).filter(Boolean);
+  const lines = text.split(/\r?\n/).map(converterLine).filter(Boolean);
   const forward = new RegExp(`(?:^|\\s)(?:${labelPattern})\\s*[:：-]?\\s*(?:${currencyToken}\\s*)?(${moneyToken})(?:\\s*${currencyToken})?(?=\\s|$)`, "i");
   const reverse = new RegExp(`(?:^|\\s)(${moneyToken})(?:\\s*${currencyToken})?\\s+(?:${labelPattern})(?=\\s|$)`, "i");
+  const target = new RegExp(`(?:^|\\s)(?:${labelPattern})(?=\\s|$)`, "i");
+  const anyMoneyLabel = new RegExp(`${subtotalLabel}|${vatLabel}|${totalLabel}`, "ig");
+  const token = new RegExp(`(?:${currencyToken}\\s*)?(${moneyToken})(?:\\s*${currencyToken})?`, "i");
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const direct = line.match(forward) || line.match(reverse);
-    if (!direct?.[1]) continue;
-    const value = parseMoneyToken(direct[1]);
-    if (value !== null) return moneyEvidence(value, direct[0], 0.95);
+    if (direct?.[1]) {
+      const value = parseMoneyToken(direct[1]);
+      if (value !== null) return moneyEvidence(value, direct[0], 0.95);
+    }
+
+    if (!target.test(line)) continue;
+    target.lastIndex = 0;
+    const labelsOnLine = line.match(anyMoneyLabel)?.length ?? 0;
+    anyMoneyLabel.lastIndex = 0;
+    if (labelsOnLine !== 1) continue;
+
+    for (let nextIndex = index + 1; nextIndex < Math.min(lines.length, index + 4); nextIndex += 1) {
+      const next = lines[nextIndex];
+      if (anyMoneyLabel.test(next)) {
+        anyMoneyLabel.lastIndex = 0;
+        break;
+      }
+      anyMoneyLabel.lastIndex = 0;
+      const candidate = next.match(token);
+      if (!candidate?.[1]) continue;
+      const value = parseMoneyToken(candidate[1]);
+      if (value !== null) return moneyEvidence(value, `${line} ${next}`, 0.9);
+    }
   }
 
-  const flat = compact(text);
+  const flat = compact(text.replace(/[|\t]/g, " "));
   const direct = flat.match(forward) || flat.match(reverse);
   if (direct?.[1]) {
     const value = parseMoneyToken(direct[1]);
@@ -97,31 +128,33 @@ function recoverMoneyAroundLabel(rawText: string, labelPattern: string): Evidenc
 }
 
 function recoverReorderedTotals(rawText: string) {
-  const text = compact(rawText.normalize("NFKC").replace(/\u00a0/g, " "));
-  const subtotalLabel = String.raw`(?:SUBTOTAL|ИТОГО\s+БЕЗ\s+НДС|ПРОМЕЖУТОЧНЫЙ\s+ИТОГ)`;
-  const vatLabel = String.raw`(?:VAT(?:\s*\d{1,2}\s*%)?|НДС(?:\s*\d{1,2}\s*%)?)`;
-  const totalLabel = String.raw`(?:GRAND\s+TOTAL|TOTAL\s+DUE|ИТОГО\s+К\s+ОПЛАТЕ|ВСЕГО\s+К\s+ОПЛАТЕ|TOTAL|ИТОГО)`;
+  const text = compact(rawText.normalize("NFKC").replace(/\u00a0/g, " ").replace(/[|\t]/g, " ").replace(/[*_`#]+/g, " "));
 
   const grouped = text.match(new RegExp(
     `${subtotalLabel}\\s+${vatLabel}\\s+${totalLabel}\\s+(${moneyToken})(?:\\s*${currencyToken})?\\s+(${moneyToken})(?:\\s*${currencyToken})?\\s+(${moneyToken})(?:\\s*${currencyToken})?`,
     "i",
   ));
+  const reverseGrouped = !grouped ? text.match(new RegExp(
+    `(${moneyToken})(?:\\s*${currencyToken})?\\s+(${moneyToken})(?:\\s*${currencyToken})?\\s+(${moneyToken})(?:\\s*${currencyToken})?\\s+${subtotalLabel}\\s+${vatLabel}\\s+${totalLabel}`,
+    "i",
+  )) : null;
+  const source = grouped || reverseGrouped;
 
-  const groupedValues = grouped
-    ? [grouped[1], grouped[2], grouped[3]].map((token) => parseMoneyToken(token))
+  const groupedValues = source
+    ? [source[1], source[2], source[3]].map((token) => parseMoneyToken(token))
     : [null, null, null];
-  const groupedReliable = Boolean(grouped && groupedValues.every((value) => value !== null));
+  const groupedReliable = Boolean(source && groupedValues.every((value) => value !== null));
 
   return {
     grouped: groupedReliable,
     subtotal: groupedValues[0] !== null
-      ? moneyEvidence(groupedValues[0]!, grouped?.[0] || "", 0.95)
+      ? moneyEvidence(groupedValues[0]!, source?.[0] || "", 0.95)
       : recoverMoneyAroundLabel(rawText, subtotalLabel),
     vat: groupedValues[1] !== null
-      ? moneyEvidence(groupedValues[1]!, grouped?.[0] || "", 0.95)
+      ? moneyEvidence(groupedValues[1]!, source?.[0] || "", 0.95)
       : recoverMoneyAroundLabel(rawText, vatLabel),
     total: groupedValues[2] !== null
-      ? moneyEvidence(groupedValues[2]!, grouped?.[0] || "", 0.95)
+      ? moneyEvidence(groupedValues[2]!, source?.[0] || "", 0.95)
       : recoverMoneyAroundLabel(rawText, totalLabel),
   };
 }
@@ -141,9 +174,6 @@ function sanitizePoReference(data: InvoiceData, rawText: string): InvoiceData {
   const po = compact(data.po_number.value);
   if (!po) return data;
 
-  // OCR/converter noise such as "rtLab" must not become a green PO check.
-  // For the current MVP a PO reference must contain a digit and must follow an
-  // explicit standalone PO/P.O./Purchase Order label in the source text.
   const hasDigit = /\d/.test(po);
   const explicitLabel = new RegExp(
     `(?:^|[\\s|])(?:PURCHASE\\s+ORDER|P\\.?\\s*O\\.?|PO)(?:\\s*(?:NUMBER|NO\\.?|#|№))?\\s*[:：#-]?\\s*${escapeRegex(po)}(?=$|[\\s|])`,
@@ -331,9 +361,6 @@ function normalizeExtraction(
     return true;
   });
 
-  // Normalization may be called more than once in the processing pipeline.
-  // Add evidence bonuses only once so a repeated pass cannot inflate the score
-  // and accidentally turn needs_review back into reliable.
   let score = assessment.score;
   if (arithmetic.totalsReconcile && !assessment.signals.includes("subtotal + VAT = total")) score += 10;
   if (arithmetic.lineSumReconciles && !assessment.signals.includes("line-item sum reconciles")) score += 10;
@@ -357,7 +384,7 @@ function normalizeExtraction(
     issues: status === "reliable" && humanConfirmed ? [] : normalizedIssues,
     signals: [...new Set([
       ...assessment.signals,
-      ...(recoveredResult.recovered ? ["invoice structure recovered despite collapsed converter text"] : []),
+      ...(recoveredResult.recovered ? ["invoice structure recovered despite converter layout"] : []),
       ...(arithmetic.totalsReconcile ? ["subtotal + VAT = total"] : []),
       ...(arithmetic.lineSumReconciles ? ["line-item sum reconciles"] : []),
       ...(arithmetic.rowMathReconciles ? ["detected line-item arithmetic reconciles"] : []),
@@ -439,9 +466,6 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
     humanConfirmed: false,
     extraction,
   });
-  // invoice-engine is the single source of truth for business checks.
-  // Reliability only decides whether those verified checks are allowed to
-  // produce a risk claim when extraction is incomplete.
   const checks = base.checks;
   const { failures, riskLevel, riskScore } = riskFromChecks(checks);
   const duplicateFailure = checks.some((item) => item.id === "duplicate-invoice-number" && item.status === "fail");
@@ -455,7 +479,7 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
       checks,
       risk_score: null,
       risk_level: "not_calculated",
-      summary: "This document is outside the invoice workflow supported by the current MVP.",
+      summary: "Foldline does not recognize this document as a supported invoice.",
     };
   }
 
@@ -469,7 +493,7 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
         risk_score: riskScore,
         risk_level: riskLevel,
         needs_review: [...new Set([...base.needs_review, ...failures.flatMap((item) => item.fields)])],
-        summary: "A verified exception was found, although some extracted fields still need review.",
+        summary: "A verified issue was found. Some other fields still need review.",
       };
     }
 
@@ -480,7 +504,7 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
       checks,
       risk_score: null,
       risk_level: "not_calculated",
-      summary: "Foldline could not read enough of this invoice reliably to make a low-risk claim.",
+      summary: "Foldline could not verify enough of this invoice to claim that the checks passed.",
     };
   }
 
@@ -492,7 +516,7 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
       checks,
       risk_score: null,
       risk_level: "not_calculated",
-      summary: "The document was read, but there is not enough verifiable arithmetic or history evidence to make a risk claim.",
+      summary: "The invoice was read, but there is not enough verifiable arithmetic or history evidence to finish the check.",
     };
   }
 
@@ -505,9 +529,7 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
     risk_level: riskLevel,
     needs_review: [...new Set([...base.needs_review, ...failures.flatMap((item) => item.fields)])],
     summary: riskLevel === "low"
-      ? "The checks Foldline could verify passed."
-      : riskLevel === "medium"
-        ? "One or more verified checks need attention."
-        : "A verified high-severity exception needs attention.",
+      ? "Verified checks passed."
+      : "A verified issue needs attention.",
   };
 }
