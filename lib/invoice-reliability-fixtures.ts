@@ -32,8 +32,6 @@ VAT: 13,500 KZT
 TOTAL: 126,000 KZT
 `;
 
-// Mirrors the real Cloudflare toMarkdown failure seen in production: adjacent
-// PDF cells can arrive without separators even though the source PDF is clean.
 const collapsedCleanInvoice = `
 INVOICE
 Synthetic test document for Foldline - no real company or transaction
@@ -45,6 +43,52 @@ DescriptionQtyUnit priceAmount
 Laboratory notebooks103,50035,000Nitrile gloves, boxes152,50037,500Pipette tip racks85,00040,000Subtotal112,500 KZT
 VAT13,500 KZT
 TOTAL126,000 KZT
+`;
+
+const columnReorderedCleanInvoice = `
+INVOICE
+SUPPLIER | Qazaq Office Supply LLP
+BIN / IIN | 123456789012
+INVOICE NUMBER | KZ-2026-0813-TABLE
+DATE | 13.08.2026
+CURRENCY | KZT
+Description Qty Unit price Amount
+Laboratory notebooks 10 3,500 35,000
+Nitrile gloves, boxes 15 2,500 37,500
+Pipette tip racks 8 5,000 40,000
+| Subtotal | VAT | TOTAL |
+| 112,500 KZT | 13,500 KZT | 126,000 KZT |
+`;
+
+const columnReorderedMismatchInvoice = `
+INVOICE
+SUPPLIER | Steppe Tech Trade
+BIN / IIN | 987654321098
+INVOICE NUMBER | ST-4407-TABLE
+DATE | 13.08.2026
+CURRENCY | KZT
+Description Qty Unit price Amount
+USB-C hubs 10 3,000 30,000
+Wireless keyboards 4 5,000 20,000
+| Subtotal | VAT | TOTAL |
+| 50,000 KZT | 6,000 KZT | 59,000 KZT |
+`;
+
+const amountDueInvoice = `
+INVOICE
+SUPPLIER
+Atlas Office Systems
+INVOICE NUMBER
+AOS-9001
+DATE
+30.08.2026
+CURRENCY
+USD
+Description Qty Unit price Amount
+Printer paper 2 25.00 50.00
+Net amount: 50.00 USD
+Tax: 5.00 USD
+Amount Due: 55.00 USD
 `;
 
 const mismatchInvoice = `
@@ -177,6 +221,27 @@ export function runInvoiceReliabilityFixtures(): FixtureResult[] {
       "A clean invoice must remain verifiable when document conversion glues adjacent PDF cells together.",
     ),
     run(
+      "Column-reordered totals",
+      columnReorderedCleanInvoice,
+      (result) => result.risk_level === "low"
+        && result.checks.some((check) => check.id === "totals" && check.status === "pass"),
+      "A converter that emits total labels in one row and values in the next must still be understood.",
+    ),
+    run(
+      "Column-reordered totals mismatch",
+      columnReorderedMismatchInvoice,
+      (result) => result.risk_level === "high"
+        && result.checks.some((check) => check.id === "totals" && check.status === "fail"),
+      "A real totals error must remain visible when converter output reorders table cells.",
+    ),
+    run(
+      "Amount due aliases",
+      amountDueInvoice,
+      (result) => result.risk_level === "low"
+        && result.checks.some((check) => check.id === "totals" && check.status === "pass"),
+      "Common aliases such as Net amount, Tax and Amount Due must map to subtotal, VAT/tax and total.",
+    ),
+    run(
       "Totals mismatch",
       mismatchInvoice,
       (result) => result.extraction.status === "reliable" && result.risk_level === "high" && result.checks.some((check) => check.id === "totals" && check.status === "fail"),
@@ -205,7 +270,7 @@ export function runInvoiceReliabilityFixtures(): FixtureResult[] {
       (result) => result.extraction.status === "needs_review"
         && result.risk_level === "not_calculated"
         && result.risk_score === null,
-      "A visible line-item table with no extracted rows must never produce a low-risk claim.",
+      "A visible line-item table with no extracted rows must never produce a clean claim.",
     ),
     run(
       "Russian invoice classification",
@@ -217,13 +282,13 @@ export function runInvoiceReliabilityFixtures(): FixtureResult[] {
       "Unsupported document",
       unrelatedDocument,
       (result) => result.extraction.status === "unsupported" && result.risk_level === "not_calculated" && result.risk_score === null,
-      "A non-invoice must never receive an invented invoice risk result.",
+      "A non-invoice must never receive an invented invoice result.",
     ),
     run(
       "Polluted extraction",
       pollutedButValidInvoice,
       (result) => result.risk_level === "low" || result.risk_level === "not_calculated",
-      "PDF metadata or flattened text may lower extraction confidence, but must never create a false medium/high business risk by itself.",
+      "PDF metadata or flattened text may lower extraction confidence, but must never create a false medium/high business result by itself.",
     ),
   ];
 }
