@@ -24,7 +24,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
   const { user, supabase } = await requireUser();
   const { data } = await supabase
     .from("documents")
-    .select("id,organization_id,original_filename,content_type,status,raw_ocr_text,extracted_data,validation_data,error_message,updated_at")
+    .select("id,organization_id,shipment_id,original_filename,content_type,status,raw_ocr_text,extracted_data,validation_data,error_message,updated_at")
     .eq("id", id)
     .maybeSingle();
 
@@ -38,6 +38,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
     const validation = await validateInvoiceForDocument({
       documentId: id,
       organizationId: document.organization_id,
+      shipmentId: document.shipment_id,
       data: analysis.data,
       extraction: analysis.extraction,
     });
@@ -64,6 +65,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
     const validation = await validateInvoiceForDocument({
       documentId: id,
       organizationId: document.organization_id,
+      shipmentId: document.shipment_id,
       data: document.extracted_data as unknown as InvoiceData,
       extraction: existingValidation?.extraction,
       humanConfirmed: document.status === "reviewed",
