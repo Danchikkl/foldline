@@ -42,12 +42,14 @@ function asInvoiceData(value: unknown): InvoiceData | null {
 export async function validateInvoiceForDocument({
   documentId,
   organizationId,
+  shipmentId,
   data,
   extraction,
   humanConfirmed = false,
 }: {
   documentId: string;
   organizationId: string | null | undefined;
+  shipmentId?: string | null;
   data: InvoiceData;
   extraction?: ExtractionAssessment;
   humanConfirmed?: boolean;
@@ -59,12 +61,17 @@ export async function validateInvoiceForDocument({
     | null
     | undefined = undefined;
 
-  if (organizationId && currentNumber && currentSupplier) {
+  // Duplicate detection is intentionally local to one review/shipment.
+  // A document uploaded in Test-001 must not haunt Test-002/Test-003.
+  // If a legacy standalone document has no shipment, we skip duplicate history
+  // instead of comparing it against every invoice in the organization.
+  if (organizationId && shipmentId && currentNumber && currentSupplier) {
     const admin = createAdminClient();
     const { data: rows, error } = await admin
       .from("documents")
       .select("id,original_filename,extracted_data,status")
       .eq("organization_id", organizationId)
+      .eq("shipment_id", shipmentId)
       .neq("id", documentId)
       .in("status", ["ready", "reviewed"])
       .not("extracted_data", "is", null)
@@ -87,7 +94,7 @@ export async function validateInvoiceForDocument({
         }
       }
     } else {
-      console.warn("Could not check invoice history", { documentId, organizationId, error: error.message });
+      console.warn("Could not check invoice history", { documentId, organizationId, shipmentId, error: error.message });
     }
   }
 
