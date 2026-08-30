@@ -7,7 +7,9 @@ export const ALLOWED_UPLOAD_TYPES = [
   "image/webp",
 ] as const;
 
+// null means no monthly document cap. For now Pro changes only the invoice/document
+// allowance; it does not unlock a separate feature set.
 export const PLAN_LIMITS = {
   free: 10,
-  pro: 500,
+  pro: null,
 } as const;
