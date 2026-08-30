@@ -70,7 +70,23 @@ export default async function DocumentPage({ params }: { params: Promise<{ id: s
       extraction: existingValidation?.extraction,
       humanConfirmed: document.status === "reviewed",
     });
-    document = { ...document, validation_data: { ...validation, engine_version: INVOICE_ENGINE_VERSION } };
+    const versionedValidation = { ...validation, engine_version: INVOICE_ENGINE_VERSION };
+    document = { ...document, validation_data: versionedValidation };
+
+    // Re-save validation because duplicate scope can change independently of
+    // parser version (for example after moving from organization-wide history
+    // to review-local history). This also repairs old test results after they
+    // are opened once.
+    try {
+      const admin = createAdminClient();
+      await admin
+        .from("documents")
+        .update({ validation_data: versionedValidation })
+        .eq("id", id)
+        .eq("owner_id", user.id);
+    } catch (error) {
+      console.warn("Could not persist refreshed invoice validation", { documentId: id, error });
+    }
   }
 
   return (
