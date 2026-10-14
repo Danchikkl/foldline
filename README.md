@@ -1,10 +1,10 @@
-# Foldline — Reliability-gated invoice review MVP
+# Foldline — Invoice exception control MVP
 
-Foldline is an early B2B document-review product. The current reliable product scope is intentionally narrow:
+Foldline is an early B2B accounts-payable product. The current reliable product scope is intentionally narrow:
 
-**Invoice → extraction → reliability gate → deterministic checks → human review → export**
+**Incoming invoice → extraction → reliability gate → duplicate/completeness/arithmetic checks → exception review → export**
 
-Broader cross-document reconciliation (invoice ↔ packing list ↔ PO ↔ transport documents) remains a product direction, not a finished claim.
+Revised-invoice follow-up and broader PO/receipt matching remain validation targets, not finished product claims.
 
 ## Core rule
 
@@ -22,7 +22,7 @@ Possible document states are:
 - `unsupported` → no invoice claim is made;
 - processing failure → explicit retry state.
 
-## What the current invoice engine checks
+## What the current invoice exception engine checks
 
 When the required extraction is reliable enough:
 - supplier identity and invoice number presence;
@@ -30,9 +30,10 @@ When the required extraction is reliable enough:
 - `subtotal + VAT ≈ total` when all required values are available;
 - line-item `quantity × unit price ≈ amount`;
 - line-item sum against subtotal/total;
-- duplicate invoice number **only together with the same supplier identity**.
+- exact duplicate invoice references together with the same supplier identity;
+- strong near-reference duplicate candidates when supplier identity matches, the normalized reference differs only slightly, the total matches, and known dates do not conflict.
 
-A missing PO is informational by default. It is not a business error unless a future workspace rule explicitly requires one.
+A missing PO is informational by default. Client-specific required fields and revised-invoice follow-up are being validated before they become configurable workflow rules.
 
 ## Parsing strategy
 
@@ -123,3 +124,8 @@ Do not market a workflow as reliable merely because a parser returned values. Be
 - a known mismatch must be caught;
 - an unsupported/non-invoice document must receive no invented invoice risk;
 - uncertain extraction must stop at `Needs review` until a person confirms it.
+
+
+## Current product thesis
+
+Foldline is no longer positioned as an arithmetic checker. Arithmetic remains one exception type. The MVP is being validated as an **invoice exception control** layer: catch duplicate, incomplete, uncertain, or internally inconsistent invoices early so AP teams spend time on the invoices that actually need action.
