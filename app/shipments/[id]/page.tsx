@@ -57,20 +57,16 @@ export default async function ShipmentPage({ params }: Props) {
 
   if (!shipment) notFound();
 
-  const [{ data: documents }, { data: discrepancies }] = await Promise.all([
-    supabase
-      .from("documents")
-      .select("id,original_filename,status,document_type,validation_data,created_at")
-      .eq("shipment_id", id)
-      .order("created_at", { ascending: true }),
-    supabase
-      .from("discrepancies")
-      .select("id,title,message,severity,status,field_key,created_at")
-      .eq("shipment_id", id)
-      .order("created_at", { ascending: false }),
-  ]);
+  const { data: documents } = await supabase
+    .from("documents")
+    .select("id,original_filename,status,document_type,validation_data,created_at")
+    .eq("shipment_id", id)
+    .order("created_at", { ascending: true });
 
-  const openDiscrepancies = (discrepancies ?? []).filter((d: any) => d.status === "open");
+  const flaggedDocuments = (documents ?? []).filter((document: any) => {
+    const validation = document.validation_data as DocumentValidation | null | undefined;
+    return validation?.risk_level === "high" || validation?.risk_level === "medium";
+  });
   const reviewMeta = `Invoice exception review · ${new Date(shipment.created_at).toLocaleDateString()}`;
 
   return (
@@ -91,9 +87,9 @@ export default async function ShipmentPage({ params }: Props) {
 
           <section className="insightCard">
             <span className="eyebrow">Exception queue</span>
-            <h3>{openDiscrepancies.length ? `${openDiscrepancies.length} exception${openDiscrepancies.length === 1 ? "" : "s"}` : "No verified invoice exceptions"}</h3>
+            <h3>{flaggedDocuments.length ? `${flaggedDocuments.length} invoice exception${flaggedDocuments.length === 1 ? "" : "s"}` : "No verified invoice exceptions"}</h3>
             <p>Foldline checks each incoming invoice for duplicate signals, missing core data and arithmetic mismatches. Uncertain extraction stays in review instead of being treated as a clean invoice.</p>
-            <div className="insightStat">{openDiscrepancies.length ? <ShieldAlert/> : <ShieldCheck/>}<div><b>Review by exception</b><span>{openDiscrepancies.length ? "Review verified exceptions below." : "Upload invoices to start the checks."}</span></div></div>
+            <div className="insightStat">{flaggedDocuments.length ? <ShieldAlert/> : <ShieldCheck/>}<div><b>Review by exception</b><span>{flaggedDocuments.length ? "Open the flagged invoices below." : "Upload invoices to start the checks."}</span></div></div>
           </section>
         </div>
 
@@ -113,18 +109,6 @@ export default async function ShipmentPage({ params }: Props) {
           </div>
         </section>
 
-        <section className="documentsSection">
-          <div className="sectionHeader"><h2>Review exceptions</h2><span>{openDiscrepancies.length} verified</span></div>
-          <div className="documentList">
-            {openDiscrepancies.length ? openDiscrepancies.map((d: any) => (
-              <div className="documentRow" key={d.id}>
-                <div className="docIcon"><ShieldAlert/></div>
-                <div className="docName"><b>{d.title}</b><span>{d.message}</span></div>
-                <span className={`status status-${d.severity}`}>{d.severity}</span>
-              </div>
-            )) : <div className="emptyList">No verified review-level exceptions yet.</div>}
-          </div>
-        </section>
       </div>
     </DashboardShell>
   );
