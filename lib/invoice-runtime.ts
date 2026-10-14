@@ -5,7 +5,7 @@ import {
   type ExtractionAssessment,
 } from "@/lib/invoice-reliability";
 
-export const INVOICE_ENGINE_VERSION = "invoice-runtime-2026-08-30.3";
+export const INVOICE_ENGINE_VERSION = "invoice-runtime-2026-10-14.1";
 
 const MONEY = String.raw`(?:\d{1,3}(?:[\s,'’.]\d{3})+|\d+(?:[.,]\d{1,2})?)`;
 const CURRENCY = String.raw`(?:KZT|USD|EUR|RUB|₸|\$|€|₽)`;
