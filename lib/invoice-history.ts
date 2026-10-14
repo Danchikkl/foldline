@@ -113,11 +113,16 @@ function duplicateCandidate(current: InvoiceData, candidate: InvoiceData) {
   const candidateDate = normalizeInvoiceDate(candidate.invoice_date.value);
   const bothDatesKnown = Boolean(currentDate && candidateDate);
   const dateMatches = bothDatesKnown && currentDate === candidateDate;
+  const currentCurrency = String(current.currency.value ?? "").trim().toUpperCase();
+  const candidateCurrency = String(candidate.currency.value ?? "").trim().toUpperCase();
+  const bothCurrenciesKnown = Boolean(currentCurrency && candidateCurrency);
+  const currencyMatches = bothCurrenciesKnown && currentCurrency === candidateCurrency;
 
-  if (!amountMatches || (bothDatesKnown && !dateMatches)) return null;
+  if (!amountMatches || (bothDatesKnown && !dateMatches) || (bothCurrenciesKnown && !currencyMatches)) return null;
 
   const signals = ["supplier", "similar invoice number", "total"];
   if (dateMatches) signals.push("date");
+  if (currencyMatches) signals.push("currency");
   return { matchType: "similar_reference" as const, signals };
 }
 
