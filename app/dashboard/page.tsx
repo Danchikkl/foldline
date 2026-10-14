@@ -21,8 +21,8 @@ export default async function Dashboard() {
       <div className="dashboard">
         <header className="dashHeader">
           <div>
-            <span className="eyebrow">Document review</span>
-            <h1>Review an invoice before a small error becomes a real problem.</h1>
+            <span className="eyebrow">Invoice exception control</span>
+            <h1>Catch invoice exceptions before they become AP rework.</h1>
           </div>
           <Link href="/settings/billing" className="planBadge">Reserve early access</Link>
         </header>
@@ -30,15 +30,15 @@ export default async function Dashboard() {
         <div className="dashGrid">
           <div className="insightCard">
             <span className="eyebrow">New review</span>
-            <h3>Start with an invoice.</h3>
-            <p>Give the review a reference. Route details are optional. After creation you’ll go straight to the upload screen.</p>
+            <h3>Start an exception review.</h3>
+            <p>Give the review a reference, then upload the incoming supplier invoices you want to check.</p>
             <NewShipmentForm />
           </div>
 
           <div className="insightCard">
             <span className="eyebrow">Reliability first</span>
-            <h3>Extract. Verify. Then calculate risk.</h3>
-            <p>If Foldline cannot read an invoice reliably enough, it shows “Needs review” instead of inventing a risk percentage.</p>
+            <h3>Read. Cross-check. Surface exceptions.</h3>
+            <p>Foldline checks duplicates, completeness and arithmetic only where the underlying extraction is reliable. Uncertain invoices are routed to review instead of being marked clean.</p>
             <div className="insightStat">
               <ShieldCheck />
               <div>
@@ -54,11 +54,11 @@ export default async function Dashboard() {
           <div className="documentList">
             {shipments?.length ? shipments.map((shipment: any) => {
               const needsAttention = shipment.status === "attention";
-              const route = [shipment.origin, shipment.destination].filter(Boolean).join(" → ");
+              const reviewMeta = `Invoice review · ${new Date(shipment.created_at).toLocaleDateString()}`;
               return (
                 <Link href={`/shipments/${shipment.id}`} className="documentRow" key={shipment.id}>
                   <div className="docIcon">{needsAttention ? <AlertTriangle /> : <PackageCheck />}</div>
-                  <div className="docName"><b>{shipment.reference}</b><span><Clock3 size={13}/>{route || "No route set"} · {new Date(shipment.created_at).toLocaleDateString()}</span></div>
+                  <div className="docName"><b>{shipment.reference}</b><span><Clock3 size={13}/>{reviewMeta}</span></div>
                   <span className={`status status-${shipment.status}`}>{shipment.status}</span>
                   <ArrowRight size={16} />
                 </Link>
