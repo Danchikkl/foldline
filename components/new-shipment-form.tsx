@@ -11,8 +11,6 @@ type ShipmentCreateResponse = {
 export function NewShipmentForm() {
   const router = useRouter();
   const [reference, setReference] = useState("");
-  const [origin, setOrigin] = useState("");
-  const [destination, setDestination] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -26,7 +24,7 @@ export function NewShipmentForm() {
       const response = await fetch("/api/shipments", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reference, origin, destination }),
+        body: JSON.stringify({ reference, origin: "", destination: "" }),
       });
 
       const data = (await response.json()) as ShipmentCreateResponse;
@@ -47,27 +45,9 @@ export function NewShipmentForm() {
         <input
           value={reference}
           onChange={(e) => setReference(e.target.value)}
-          placeholder="INV-2048 or KZ-00482"
+          placeholder="October AP batch or INV-2048"
           maxLength={120}
           required
-        />
-      </label>
-      <label>
-        Origin <span aria-hidden="true">(optional)</span>
-        <input
-          value={origin}
-          onChange={(e) => setOrigin(e.target.value)}
-          placeholder="Shenzhen, China"
-          maxLength={120}
-        />
-      </label>
-      <label>
-        Destination <span aria-hidden="true">(optional)</span>
-        <input
-          value={destination}
-          onChange={(e) => setDestination(e.target.value)}
-          placeholder="Astana, Kazakhstan"
-          maxLength={120}
         />
       </label>
       {error && <div className="formError" role="alert">{error}</div>}
