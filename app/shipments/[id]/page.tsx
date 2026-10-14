@@ -71,7 +71,7 @@ export default async function ShipmentPage({ params }: Props) {
   ]);
 
   const openDiscrepancies = (discrepancies ?? []).filter((d: any) => d.status === "open");
-  const route = [shipment.origin, shipment.destination].filter(Boolean).join(" → ") || "Route not set";
+  const reviewMeta = `Invoice exception review · ${new Date(shipment.created_at).toLocaleDateString()}`;
 
   return (
     <DashboardShell email={user.email || "account"}>
@@ -79,9 +79,9 @@ export default async function ShipmentPage({ params }: Props) {
         <header className="dashHeader">
           <div>
             <Link href="/dashboard" className="iconText"><ArrowLeft size={15}/> Back to reviews</Link>
-            <span className="eyebrow">Review packet</span>
+            <span className="eyebrow">Invoice exception review</span>
             <h1>{shipment.reference}</h1>
-            <p>{route}</p>
+            <p>{reviewMeta}</p>
           </div>
           <span className={`status status-${shipment.status}`}>{shipment.status}</span>
         </header>
@@ -90,10 +90,10 @@ export default async function ShipmentPage({ params }: Props) {
           <ShipmentUploadDropzone shipmentId={shipment.id} />
 
           <section className="insightCard">
-            <span className="eyebrow">Verified exceptions</span>
-            <h3>{openDiscrepancies.length ? `${openDiscrepancies.length} exception${openDiscrepancies.length === 1 ? "" : "s"}` : "No verified packet exceptions"}</h3>
-            <p>Foldline does not show a packet risk percentage until cross-document checks are backed by reliable extraction. The current MVP verifies invoices individually first.</p>
-            <div className="insightStat">{openDiscrepancies.length ? <ShieldAlert/> : <ShieldCheck/>}<div><b>Reliability gate</b><span>{openDiscrepancies.length ? "Review verified exceptions below." : "No packet-level claim is made yet."}</span></div></div>
+            <span className="eyebrow">Exception queue</span>
+            <h3>{openDiscrepancies.length ? `${openDiscrepancies.length} exception${openDiscrepancies.length === 1 ? "" : "s"}` : "No verified invoice exceptions"}</h3>
+            <p>Foldline checks each incoming invoice for duplicate signals, missing core data and arithmetic mismatches. Uncertain extraction stays in review instead of being treated as a clean invoice.</p>
+            <div className="insightStat">{openDiscrepancies.length ? <ShieldAlert/> : <ShieldCheck/>}<div><b>Review by exception</b><span>{openDiscrepancies.length ? "Review verified exceptions below." : "Upload invoices to start the checks."}</span></div></div>
           </section>
         </div>
 
@@ -109,12 +109,12 @@ export default async function ShipmentPage({ params }: Props) {
                   <span className={`status ${outcome.className}`.trim()}>{outcome.label}</span>
                 </Link>
               );
-            }) : <div className="emptyList">No documents yet. The reliable review workflow currently starts with an invoice.</div>}
+            }) : <div className="emptyList">No invoices yet. Upload incoming supplier invoices to start the exception review.</div>}
           </div>
         </section>
 
         <section className="documentsSection">
-          <div className="sectionHeader"><h2>Packet exceptions</h2><span>{openDiscrepancies.length} verified</span></div>
+          <div className="sectionHeader"><h2>Review exceptions</h2><span>{openDiscrepancies.length} verified</span></div>
           <div className="documentList">
             {openDiscrepancies.length ? openDiscrepancies.map((d: any) => (
               <div className="documentRow" key={d.id}>
@@ -122,7 +122,7 @@ export default async function ShipmentPage({ params }: Props) {
                 <div className="docName"><b>{d.title}</b><span>{d.message}</span></div>
                 <span className={`status status-${d.severity}`}>{d.severity}</span>
               </div>
-            )) : <div className="emptyList">No verified packet-level exceptions yet.</div>}
+            )) : <div className="emptyList">No verified review-level exceptions yet.</div>}
           </div>
         </section>
       </div>
