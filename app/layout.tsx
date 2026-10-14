@@ -6,22 +6,22 @@ const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://foldline.app";
 
 export const metadata: Metadata = {
   metadataBase: new URL(appUrl),
-  title: { default: "Foldline — trusted document data", template: "%s · Foldline" },
-  description: "Turn invoices and messy business documents into reviewed, traceable data with evidence-linked extraction and review by exception.",
+  title: { default: "Foldline — invoice exception control", template: "%s · Foldline" },
+  description: "Catch duplicate, incomplete and inconsistent supplier invoices before they become AP rework or payment mistakes.",
   applicationName: "Foldline",
   category: "business",
   alternates: { canonical: "/" },
   openGraph: {
     type: "website",
     siteName: "Foldline",
-    title: "Foldline — trusted document data",
-    description: "Messy documents in. Trusted data out. Review exceptions, not every field.",
+    title: "Foldline — invoice exception control",
+    description: "Catch invoice exceptions early: duplicates, incomplete core data and arithmetic mismatches.",
     url: "/",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Foldline — trusted document data",
-    description: "Messy documents in. Trusted data out. Review exceptions, not every field.",
+    title: "Foldline — invoice exception control",
+    description: "Catch invoice exceptions early: duplicates, incomplete core data and arithmetic mismatches.",
   },
 };
 
