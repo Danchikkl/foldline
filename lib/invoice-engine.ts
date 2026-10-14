@@ -44,6 +44,8 @@ export type DuplicateInvoice = {
   documentId: string;
   filename: string;
   invoiceNumber: string;
+  matchType?: "exact" | "similar_reference";
+  signals?: string[];
 } | null | undefined;
 
 export type ValidationContext = {
@@ -395,18 +397,36 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
     : check("po-number", "PO reference", "info", "info", "No PO reference was found. Foldline does not treat PO as mandatory unless a workspace rule requires it."));
 
   if (context.duplicateInvoice === null) {
-    checks.push(check("duplicate-invoice-number", "Duplicate invoice", "pass", "info", "No matching invoice from the same supplier was found in this workspace."));
-  } else if (context.duplicateInvoice) {
     checks.push(check(
       "duplicate-invoice-number",
       "Duplicate invoice",
+      "pass",
+      "info",
+      "No exact or strong near-duplicate was found in this review.",
+    ));
+  } else if (context.duplicateInvoice) {
+    const similarReference = context.duplicateInvoice.matchType === "similar_reference";
+    const signals = context.duplicateInvoice.signals?.length
+      ? ` Matched on ${context.duplicateInvoice.signals.join(", ")}.`
+      : "";
+    checks.push(check(
+      "duplicate-invoice-number",
+      similarReference ? "Possible duplicate" : "Duplicate invoice",
       "fail",
-      "high",
-      `The same supplier and invoice number already appear in ${context.duplicateInvoice.filename}.`,
+      similarReference ? "medium" : "high",
+      similarReference
+        ? `A previous invoice in this review has a very similar reference and matching business details: ${context.duplicateInvoice.filename}.${signals}`
+        : `The same supplier and invoice number already appear in ${context.duplicateInvoice.filename}.`,
       ["invoice_number", "supplier_name"],
     ));
   } else {
-    checks.push(check("duplicate-invoice-number", "Duplicate invoice", "skipped", "info", "Duplicate detection was not run because the supplier or invoice number was not reliable enough."));
+    checks.push(check(
+      "duplicate-invoice-number",
+      "Duplicate invoice",
+      "skipped",
+      "info",
+      "Duplicate detection was not run because the supplier or invoice number was not reliable enough.",
+    ));
   }
 
   const total = typeof data.total.value === "number" ? data.total.value : null;
