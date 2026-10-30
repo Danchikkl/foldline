@@ -13,7 +13,7 @@ const controls = [
   [FileLock2, "Private document storage", "Original files live in a private object bucket. Browser access is granted with short-lived signed URLs rather than public file links."],
   [ShieldCheck, "Row-level data isolation", "Supabase Row Level Security limits users to records they own. Sensitive mutations are routed through authenticated server endpoints."],
   [KeyRound, "Server-only secrets", "Storage credentials, Stripe keys, service-role credentials and OCR secrets are never exposed through NEXT_PUBLIC variables."],
-  [Eye, "Human approval before export", "OCR output is treated as untrusted machine output. Proofline highlights uncertainty and reconciliation failures before approval."],
+  [Eye, "Human approval before payment", "Extracted data is treated as untrusted machine output. Uncertain reads go to review instead of being reported as supplier errors, and every approval is recorded."],
   [LockKeyhole, "Signed OCR callbacks", "OCR completion callbacks use HMAC verification and replay windows so arbitrary third parties cannot mark processing jobs complete."],
   [Database, "Audit-ready workflow", "Approval and workflow events are designed to be recorded server-side rather than trusting the browser to author authoritative logs."],
 ] as const;

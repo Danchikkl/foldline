@@ -7,22 +7,22 @@ const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://foldline.app";
 
 export const metadata: Metadata = {
   metadataBase: new URL(appUrl),
-  title: { default: "Foldline — trusted document data", template: "%s · Foldline" },
-  description: "Turn invoices and messy business documents into reviewed, traceable data with evidence-linked extraction and review by exception.",
+  title: { default: "Foldline — catch duplicate and problem invoices before payment", template: "%s · Foldline" },
+  description: "Invoice exception control for Accounts Payable. Foldline flags duplicate and near-duplicate supplier invoices, missing data and totals that don't add up, so AP reviews only what needs action.",
   applicationName: "Foldline",
   category: "business",
   alternates: { canonical: "/" },
   openGraph: {
     type: "website",
     siteName: "Foldline",
-    title: "Foldline — trusted document data",
-    description: "Messy documents in. Trusted data out. Review exceptions, not every field.",
+    title: "Foldline — catch the duplicate invoice your ERP lets through",
+    description: "Duplicate, near-duplicate, incomplete and inconsistent supplier invoices — flagged before payment.",
     url: "/",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Foldline — trusted document data",
-    description: "Messy documents in. Trusted data out. Review exceptions, not every field.",
+    title: "Foldline — catch the duplicate invoice your ERP lets through",
+    description: "Duplicate, near-duplicate, incomplete and inconsistent supplier invoices — flagged before payment.",
   },
 };
 

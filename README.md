@@ -3,13 +3,15 @@
 A production-minded MVP for **Document → Structured Data → Proofline Review → CSV**.
 
 ## Product idea
-Foldline is deliberately not positioned as “another OCR API”. The differentiator in this MVP is **Proofline**:
-- evidence attached to extracted values;
-- deterministic integrity checks (`subtotal + VAT ≈ total`, line-item reconciliation, BIN/IIN format);
-- **Review by Exception**, so users see suspicious fields first;
-- an append-only-ish server-written audit event for edits/approval.
+Foldline is **invoice exception control for Accounts Payable**: catch duplicate, incomplete and inconsistent supplier invoices before they turn into manual AP work or payment mistakes.
 
-MonkeyOCRv2 is an external parsing engine. The web app does not claim the model as proprietary technology.
+Built from AP practitioner interviews (see `docs/` for the reasoning):
+- **Duplicates & near-duplicates** — every invoice is compared with earlier invoices in the workspace. Exact repeats (also after ignoring spaces, dashes, leading zeros, Cyrillic look-alikes), changed references (`INV-10234` → `INV-10234A`), same supplier + amount + date under a new number, and the same number with a different amount. Consecutive numbers on recurring bills are not flagged. Logic: `lib/duplicates.ts`.
+- **Incomplete invoices** — supplier, invoice number, date and total must be present.
+- **Inconsistent totals** — subtotal + VAT vs total, line sums, quantity × unit price.
+- **Reliability gate** — extraction uncertainty ≠ business risk. A mismatch on low-confidence values is *Requires review*, never *Issue found*.
+
+Outcomes: `checked` · `issue` · `review` · `not_invoice` (stored in `documents.validation_data.outcome`). Tests: `npm run test:checks`.
 
 ## Stack
 - Next.js 16 / React 19
