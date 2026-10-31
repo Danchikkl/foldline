@@ -343,6 +343,9 @@ function normalizeExtraction(
   if (!validSupplier(data)) missing.push("supplier name could not be read reliably.");
   if (!validInvoiceNumber(data)) missing.push("invoice number could not be read reliably.");
   if (!validTotal(data)) missing.push("total could not be read reliably.");
+  // AP cannot process an invoice without a date (duplicate checks, payment terms,
+  // tax period). Missing or unreadable → human review, unless a human confirmed it.
+  if (!humanConfirmed && String(data.invoice_date.value ?? "").trim().length < 6) missing.push("invoice date is missing or unreadable.");
 
   const unresolvedMoneyConflict = moneyConflict && !strongArithmetic;
   const unresolvedLineConflict = lineConflict && arithmetic.validRows > 0 && !arithmetic.lineSumReconciles;

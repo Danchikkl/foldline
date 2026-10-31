@@ -168,6 +168,85 @@ function makeLineItem(
   };
 }
 
+
+// Kazakh/Russian invoices group thousands with spaces ("250 000,00"). Once a
+// converter flattens a table row, "100 2 500,00 250 000,00" is ambiguous at the
+// token level. Enumerate every way to read the numeric run as
+// quantity / unit price / amount where each multi-token number is a valid
+// thousands grouping, and keep the reading where quantity × price = amount.
+// Rows that do not reconcile under any reading are left to the other parsers,
+// so a genuine line-math exception is never silently dropped.
+const NUMERIC_TOKEN = /^\d+(?:[.,]\d+)?$/;
+const CURRENCY_TOKEN = /^(?:KZT|USD|EUR|RUB|₸|\$|€|₽)$/i;
+
+function groupedNumber(tokens: string[]): number | null {
+  if (!tokens.length) return null;
+  if (tokens.length === 1) return /^\d+(?:[.,]\d{1,3})?$/.test(tokens[0]) ? parseMoney(tokens[0]) : null;
+  if (!/^\d{1,3}$/.test(tokens[0])) return null;
+  for (const middle of tokens.slice(1, -1)) if (!/^\d{3}$/.test(middle)) return null;
+  if (!/^\d{3}(?:[.,]\d{1,2})?$/.test(tokens[tokens.length - 1])) return null;
+  return parseMoney(tokens.join(""));
+}
+
+function readNumericRun(run: string[]) {
+  for (let first = 1; first <= run.length - 2; first += 1) {
+    for (let second = first + 1; second <= run.length - 1; second += 1) {
+      const quantity = groupedNumber(run.slice(0, first));
+      const unitPrice = groupedNumber(run.slice(first, second));
+      const amount = groupedNumber(run.slice(second));
+      if (quantity === null || unitPrice === null || amount === null || quantity <= 0) continue;
+      if (Math.abs(quantity * unitPrice - amount) <= Math.max(0.01, Math.abs(amount) * 0.0005)) {
+        return { quantity, unitPrice, amount, raw: run.join(" ") };
+      }
+    }
+  }
+  return null;
+}
+
+export function parseGroupedNumberRows(section: string): { items: LineItem[]; unparsedRuns: number } {
+  const tokens = compact(section).split(" ").filter((token) => token && !CURRENCY_TOKEN.test(token));
+  const items: LineItem[] = [];
+  let unparsedRuns = 0;
+  let descriptionStart = 0;
+  let i = 0;
+  while (i < tokens.length) {
+    if (!NUMERIC_TOKEN.test(tokens[i])) { i += 1; continue; }
+    let j = i;
+    while (j < tokens.length && NUMERIC_TOKEN.test(tokens[j])) j += 1;
+    const run = tokens.slice(i, j);
+    if (run.length < 3) { i = j; continue; }
+
+    let parsed: { quantity: number; unitPrice: number; amount: number; raw: string; give: number; trail: number } | null = null;
+    // A description may end with a number ("Cable 3") and the next row's
+    // description may start with one ("2 x adapter"): let the run give back up
+    // to two tokens on either side.
+    search: for (let give = 0; give <= Math.min(2, run.length - 3); give += 1) {
+      for (let trail = 0; trail <= Math.min(2, run.length - 3 - give); trail += 1) {
+        const reading = readNumericRun(run.slice(give, run.length - trail));
+        if (reading) { parsed = { ...reading, give, trail }; break search; }
+      }
+    }
+
+    const description = compact(tokens.slice(descriptionStart, i + (parsed?.give ?? 0)).join(" "));
+    if (parsed && /[A-Za-zА-Яа-яЁё]/.test(description)) {
+      items.push({
+        description,
+        quantity: parsed.quantity,
+        unit_price: parsed.unitPrice,
+        amount: parsed.amount,
+        confidence: 0.93,
+        evidence: `${description} ${parsed.raw}`.slice(0, 700),
+      });
+      descriptionStart = j - parsed.trail;
+    } else {
+      unparsedRuns += 1;
+      descriptionStart = j;
+    }
+    i = j;
+  }
+  return { items: items.slice(0, 500), unparsedRuns };
+}
+
 function parseFlattenedLineItems(text: string): LineItem[] {
   const descriptionMatch = /(?:DESCRIPTION|ОПИСАНИЕ)/i.exec(text);
   if (!descriptionMatch) return [];
@@ -192,6 +271,10 @@ function parseFlattenedLineItems(text: string): LineItem[] {
   const end = afterHeader.search(/(?:SUBTOTAL|ИТОГО\s+БЕЗ\s+НДС|ПРОМЕЖУТОЧНЫЙ\s+ИТОГ|VAT|НДС|TOTAL)/i);
   const section = compact(end >= 0 ? afterHeader.slice(0, end) : afterHeader.slice(0, 5000));
   if (!section) return [];
+
+  // Prefer the arithmetic-verified reading when it accounts for every numeric run.
+  const grouped = parseGroupedNumberRows(section);
+  if (grouped.items.length && grouped.unparsedRuns === 0) return grouped.items;
 
   const items: LineItem[] = [];
   const signatures = new Set<string>();
@@ -275,6 +358,35 @@ function good(value: EvidenceValue) {
   return value.value !== null && value.value !== "";
 }
 
+
+// The supplier block often sits ABOVE the "INVOICE" title, and the buyer block
+// ("Bill to … BIN …") below it. Search the whole document and skip any BIN whose
+// nearest preceding party label is a buyer label.
+const BUYER_LABEL = /(?:BILL(?:ED)?\s+TO|SHIP\s+TO|BUYER|CUSTOMER|CLIENT|ПОКУПАТЕЛ[ЬЯ]|ЗАКАЗЧИК|ПЛАТЕЛЬЩИК|ПОЛУЧАТЕЛ[ЬЯ])/gi;
+const SUPPLIER_LABEL = /(?:SUPPLIER|VENDOR|SELLER|FROM|ПОСТАВЩИК|ПРОДАВЕЦ|ИСПОЛНИТЕЛЬ)/gi;
+
+function lastIndexOfPattern(text: string, pattern: RegExp) {
+  let last = -1;
+  for (const match of text.matchAll(pattern)) last = match.index ?? last;
+  return last;
+}
+
+function supplierBinFrom(rawText: string, label: RegExp): EvidenceValue {
+  const flat = compact(repairCollapsedLabels(rawText).replace(/[|]/g, " ").replace(/[#*_`]+/g, " "));
+  const pattern = new RegExp(`${label.source}\\s*[:：-]?\\s*(\\d{12})`, "gi");
+  let fallback: EvidenceValue | null = null;
+  for (const match of flat.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    const before = flat.slice(Math.max(0, index - 160), index);
+    const buyerAt = lastIndexOfPattern(before, BUYER_LABEL);
+    const supplierAt = lastIndexOfPattern(before, SUPPLIER_LABEL);
+    if (buyerAt >= 0 && buyerAt > supplierAt) continue;
+    if (supplierAt >= 0) return evidence(match[1], 0.99, match[0]);
+    fallback ??= evidence(match[1], 0.97, match[0]);
+  }
+  return fallback ?? evidence(null, 0);
+}
+
 export function extractInvoice(rawText: string): InvoiceData {
   const legacy = extractInvoiceLegacy(rawText);
   const text = semanticText(rawText).slice(0, 250_000);
@@ -291,7 +403,7 @@ export function extractInvoice(rawText: string): InvoiceData {
   );
   const supplierClean = typeof supplier.value === "string" && !/PDFFormatVersion|metadata/i.test(supplier.value) ? supplier : evidence(null, 0);
 
-  const supplierBin = capturePattern(text, new RegExp(`${supplierIdLabel.source}\\s*[:：-]?\\s*(\\d{12})`, "i"), 0.99);
+  const supplierBin = supplierBinFrom(rawText, supplierIdLabel);
   const invoiceNumber = capturePattern(text, new RegExp(`${invoiceNumberLabel.source}\\s*[:：-]?\\s*([A-ZА-Я0-9][A-ZА-Я0-9_\\/-]{1,40})(?=\\s|$)`, "i"), 0.98);
   const invoiceDate = capturePattern(text, new RegExp(`${dateLabel.source}\\s*[:：-]?\\s*(\\d{1,4}[./-]\\d{1,2}[./-]\\d{1,4})`, "i"), 0.97);
   const poNumber = capturePattern(text, /(?:PURCHASE\s+ORDER|P\.?\s*O\.?|PO|ЗАКАЗ)(?:\s*(?:NUMBER|NO\.?|#|№))?(?:\s*\/\s*(?:PURCHASE\s+ORDER|P\.?\s*O\.?|PO|ЗАКАЗ)(?:\s*(?:NUMBER|NO\.?|#|№))?)?\s*[:：-]?\s*([A-ZА-Я0-9][A-ZА-Я0-9_\/-]{1,40})(?=\s|$)/i, 0.95);
