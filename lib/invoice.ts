@@ -201,7 +201,18 @@ function detectSupplier(text: string): EvidenceValue {
     return { value: cleanCell(labeled.value), confidence: 0.96, evidence: labeled.evidence };
   }
 
-  const lines = text.split(/\r?\n/).map(cleanCell).filter(Boolean).slice(0, 80);
+  const lines = documentBody(text).split(/\r?\n/).map(cleanCell).filter(Boolean).filter((line) => !isConverterNoise(line)).slice(0, 80);
+
+  // Most supplier blocks are "Company name" directly followed by its BIN/IIN.
+  // That structure is strong evidence, so it earns a confident read.
+  for (let i = 1; i < Math.min(lines.length, 40); i++) {
+    if (!/^(?:BIN|IIN|БИН|ИИН)\b/i.test(lines[i])) continue;
+    const candidate = lines[i - 1].replace(/^#+\s*/, "");
+    if (isSupplierCandidate(candidate) && !BUYER_CONTEXT.test(candidate)) {
+      return { value: candidate, confidence: 0.9, evidence: `${lines[i - 1]} ${lines[i]}`.slice(0, 500) };
+    }
+  }
+
   for (const line of lines.slice(0, 25)) {
     const candidate = line.replace(/^#+\s*/, "");
     if (isSupplierCandidate(candidate)) {
@@ -210,6 +221,23 @@ function detectSupplier(text: string): EvidenceValue {
   }
 
   return empty();
+}
+
+const BUYER_CONTEXT = /(?:bill(?:ed)?\s+to|ship\s+to|buyer|customer|покупател|заказчик|плательщик)/i;
+
+// Cloudflare's PDF → Markdown conversion prepends "# file.pdf", "## Metadata",
+// "- PDFFormatVersion=…", "- Producer=…" and "## Contents / ### Page 1".
+// None of that is invoice content.
+function documentBody(text: string) {
+  const contents = text.search(/^#{1,3}\s*Contents\s*$/im);
+  return contents >= 0 ? text.slice(contents) : text;
+}
+
+function isConverterNoise(line: string) {
+  return /^[-*]\s*[A-Za-z][A-Za-z ]{1,40}=/.test(line)
+    || /^(?:#{1,4}\s*)?(?:metadata|contents|page\s+\d+)\s*$/i.test(line)
+    || /^page\s+\d+(?:\s*(?:of|\/)\s*\d+)?$/i.test(line)
+    || /PDFFormatVersion|IsLinearized|IsAcroFormPresent|Producer=|Creator=|CreationDate=|ModDate=/i.test(line);
 }
 
 function parseMarkdownTable(text: string): LineItem[] {
