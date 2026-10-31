@@ -218,4 +218,24 @@ expect("Next month's INV-10235 with the same amount is NOT a duplicate", dupKind
 const missingDate = analyzeInvoice(kzInvoice("INV-20001", null, kzRows, "433 839,29", "52 060,71", "485 900,00"));
 expect("Invoice without a date requires review", missingDate.extraction.status === "needs_review", `Got ${missingDate.extraction.status}.`);
 
+// Cloudflare PDF → Markdown output starts with a metadata block. The supplier
+// name must come from the document, not from "PDFFormatVersion=1.4".
+const cloudflareWrapped = [
+  "# 01_original.pdf", "## Metadata", "- PDFFormatVersion=1.4", "- IsLinearized=false",
+  "- Producer=ReportLab PDF Library - www.reportlab.com", "- Title=untitled", "## Contents", "### Page 1",
+  kzInvoice("INV-10234", "12.09.2026", kzRows, "433 839,29", "52 060,71", "485 900,00"),
+].join("\n");
+const cloudflareAnalysis = analyzeInvoice(cloudflareWrapped);
+const cloudflareCheck = validateInvoiceBusiness(cloudflareAnalysis.data, { extraction: cloudflareAnalysis.extraction, duplicateInvoice: null });
+expect(
+  "Supplier name is read from the line above its BIN, not from converter metadata",
+  cloudflareAnalysis.data.supplier_name.value === "Steppe Build Supply LLP" && cloudflareAnalysis.data.supplier_name.confidence >= 0.8,
+  `Got ${JSON.stringify(cloudflareAnalysis.data.supplier_name)}.`,
+);
+expect(
+  "Clean invoice wrapped in Cloudflare metadata is Checked, not Review",
+  cloudflareAnalysis.extraction.status === "reliable" && cloudflareCheck.risk_level === "low",
+  `Got extraction=${cloudflareAnalysis.extraction.status} (${cloudflareAnalysis.extraction.issues.join("; ")}), risk=${cloudflareCheck.risk_level}.`,
+);
+
 if (results.some((result) => !result.passed) || regressionFailed) process.exit(1);
