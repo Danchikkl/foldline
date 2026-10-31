@@ -1,6 +1,7 @@
 import { analyzeInvoice } from "../lib/invoice-runtime";
 import { validateInvoiceBusiness } from "../lib/invoice-reliability";
 import { runInvoiceReliabilityFixtures } from "../lib/invoice-reliability-fixtures";
+import { duplicateCandidate } from "../lib/invoice-history";
 
 const results = runInvoiceReliabilityFixtures();
 for (const result of results) {
@@ -172,5 +173,49 @@ expect(
   weakNonInvoiceAnalysis.extraction.status === "unsupported",
   `Expected unsupported, got ${weakNonInvoiceAnalysis.extraction.status}.`,
 );
+
+// --- Kazakh number format, buyer BIN, custdev duplicate rules (2026-10-31) ---
+const kzInvoice = (number: string, date: string | null, rows: string, subtotal: string, vat: string, total: string) => `
+Steppe Build Supply LLP
+BIN 123456789012
+Almaty, Kazakhstan
+INVOICE
+Invoice No: ${number}
+${date ? `Invoice Date: ${date}` : ""}
+Bill to: Example Buyer LLP, BIN 111222333444
+Currency: KZT
+Description Qty Unit Price Amount
+${rows}
+Subtotal KZT ${subtotal}
+VAT 12% KZT ${vat}
+Total due KZT ${total}
+`;
+const kzRows = "Cement M400, 50 kg bag 100 2 500,00 250 000,00\nRebar 12 mm, tonnes 1.2 153 199,41 183 839,29";
+const kzBase = analyzeInvoice(kzInvoice("INV-10234", "12.09.2026", kzRows, "433 839,29", "52 060,71", "485 900,00"));
+const kzBaseCheck = validateInvoiceBusiness(kzBase.data, { extraction: kzBase.extraction, duplicateInvoice: null });
+expect(
+  "Space-grouped thousands (250 000,00) are read as whole numbers",
+  kzBase.data.line_items.length === 2 && kzBase.data.line_items[0].amount === 250000 && kzBase.data.line_items[1].quantity === 1.2,
+  `Got ${JSON.stringify(kzBase.data.line_items.map((i) => [i.quantity, i.unit_price, i.amount]))}.`,
+);
+expect(
+  "Clean KZ-format invoice is not flagged",
+  kzBaseCheck.risk_level === "low" && kzBase.extraction.status === "reliable",
+  `Got extraction=${kzBase.extraction.status}, risk=${kzBaseCheck.risk_level}.`,
+);
+expect(
+  "Buyer BIN after 'Bill to' is never taken as the supplier BIN",
+  kzBase.data.supplier_bin.value === "123456789012",
+  `Got ${kzBase.data.supplier_bin.value}.`,
+);
+const kzVariant = (number: string, date: string | null, total = "485 900,00") =>
+  analyzeInvoice(kzInvoice(number, date, kzRows, "433 839,29", "52 060,71", total)).data;
+const dupKind = (data: ReturnType<typeof kzVariant>) => duplicateCandidate(data, kzBase.data)?.matchType ?? "none";
+expect("INV10234 vs INV-10234 is an exact duplicate", dupKind(kzVariant("INV10234", "12.09.2026")) === "exact", dupKind(kzVariant("INV10234", "12.09.2026")));
+expect("INV-10234A three days later is a possible duplicate", dupKind(kzVariant("INV-10234A", "15.09.2026")) === "similar_reference", dupKind(kzVariant("INV-10234A", "15.09.2026")));
+expect("Different number, same supplier+amount+date is a possible duplicate", dupKind(kzVariant("77-XY", "12.09.2026")) === "same_amount_date", dupKind(kzVariant("77-XY", "12.09.2026")));
+expect("Next month's INV-10235 with the same amount is NOT a duplicate", dupKind(kzVariant("INV-10235", "12.10.2026")) === "none", dupKind(kzVariant("INV-10235", "12.10.2026")));
+const missingDate = analyzeInvoice(kzInvoice("INV-20001", null, kzRows, "433 839,29", "52 060,71", "485 900,00"));
+expect("Invoice without a date requires review", missingDate.extraction.status === "needs_review", `Got ${missingDate.extraction.status}.`);
 
 if (results.some((result) => !result.passed) || regressionFailed) process.exit(1);

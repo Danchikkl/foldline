@@ -44,7 +44,7 @@ export type DuplicateInvoice = {
   documentId: string;
   filename: string;
   invoiceNumber: string;
-  matchType?: "exact" | "similar_reference";
+  matchType?: "exact" | "similar_reference" | "number_reused" | "same_amount_date";
   signals?: string[];
 } | null | undefined;
 
@@ -405,18 +405,25 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
       "No exact or strong near-duplicate was found in this review.",
     ));
   } else if (context.duplicateInvoice) {
-    const similarReference = context.duplicateInvoice.matchType === "similar_reference";
-    const signals = context.duplicateInvoice.signals?.length
-      ? ` Matched on ${context.duplicateInvoice.signals.join(", ")}.`
-      : "";
+    const match = context.duplicateInvoice;
+    const kind = match.matchType ?? "exact";
+    const signals = match.signals?.length ? ` Matched on ${match.signals.join(", ")}.` : "";
+    const label = kind === "exact" ? "Duplicate invoice"
+      : kind === "number_reused" ? "Invoice number reused"
+      : "Possible duplicate";
+    const message = kind === "exact"
+      ? `The same supplier and invoice number already appear in ${match.filename}.`
+      : kind === "number_reused"
+        ? `${match.filename} has the same supplier and invoice number but a different total. This may be a revised invoice — confirm which one should be paid.${signals}`
+        : kind === "same_amount_date"
+          ? `${match.filename} is from the same supplier with the same total and date under a different invoice number (${match.invoiceNumber || "unreadable"}).${signals}`
+          : `A previous invoice in this review has a very similar reference and matching business details: ${match.filename}.${signals}`;
     checks.push(check(
       "duplicate-invoice-number",
-      similarReference ? "Possible duplicate" : "Duplicate invoice",
+      label,
       "fail",
-      similarReference ? "medium" : "high",
-      similarReference
-        ? `A previous invoice in this review has a very similar reference and matching business details: ${context.duplicateInvoice.filename}.${signals}`
-        : `The same supplier and invoice number already appear in ${context.duplicateInvoice.filename}.`,
+      kind === "exact" ? "high" : "medium",
+      message,
       ["invoice_number", "supplier_name"],
     ));
   } else {

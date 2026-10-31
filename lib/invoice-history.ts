@@ -12,6 +12,7 @@ function normalizeInvoiceNumber(value: unknown) {
     .normalize("NFKC")
     .trim()
     .toUpperCase()
+    .replace(/(^|[^0-9])0+(?=\d)/g, "$1")
     .replace(/[\s._'’`-]+/g, "")
     .replace(/[^A-ZА-ЯЁ0-9]/g, "");
 }
@@ -89,42 +90,82 @@ function adjacentTransposition(a: string, b: string) {
 }
 
 function similarInvoiceNumber(a: string, b: string) {
-  if (a.length < 4 || b.length < 4) return false;
-  return oneEditApart(a, b) || adjacentTransposition(a, b);
+  if (a === b) return false;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length < 3) return false;
+  // INV10234 -> INV10234A / INV102341 (suffix added on resend)
+  if (long.startsWith(short) && long.length - short.length <= 2) return true;
+  // 10234 -> INV10234 / KZ10234 (prefix added)
+  if (long.endsWith(short) && long.length - short.length <= 4) return true;
+  if (short.length >= 4 && (oneEditApart(a, b) || adjacentTransposition(a, b))) return true;
+  // A-10234 vs B-10234: same digits, different letters
+  const digitsA = a.replace(/\D/g, "");
+  return digitsA.length >= 3 && digitsA === b.replace(/\D/g, "");
 }
 
-function duplicateCandidate(current: InvoiceData, candidate: InvoiceData) {
+const NEAR_DUPLICATE_MAX_DAYS = 60;
+const SEQUENCE_MAX_DAYS = 7;
+
+function daysBetween(a: string, b: string) {
+  return Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
+}
+
+export function duplicateCandidate(current: InvoiceData, candidate: InvoiceData) {
   const currentNumber = normalizeInvoiceNumber(current.invoice_number.value);
   const candidateNumber = normalizeInvoiceNumber(candidate.invoice_number.value);
-  if (!currentNumber || !candidateNumber) return null;
 
   const currentSupplier = supplierKey(current);
   const candidateSupplier = supplierKey(candidate);
   if (!currentSupplier || currentSupplier !== candidateSupplier) return null;
 
-  if (currentNumber === candidateNumber) {
-    return { matchType: "exact" as const, signals: ["supplier", "invoice number"] };
-  }
-
-  if (!similarInvoiceNumber(currentNumber, candidateNumber)) return null;
-
   const amountMatches = sameAmount(invoiceTotal(current), invoiceTotal(candidate));
+  const bothTotalsKnown = invoiceTotal(current) !== null && invoiceTotal(candidate) !== null;
   const currentDate = normalizeInvoiceDate(current.invoice_date.value);
   const candidateDate = normalizeInvoiceDate(candidate.invoice_date.value);
   const bothDatesKnown = Boolean(currentDate && candidateDate);
   const dateMatches = bothDatesKnown && currentDate === candidateDate;
+  const days = bothDatesKnown ? daysBetween(currentDate, candidateDate) : null;
   const currentCurrency = String(current.currency.value ?? "").trim().toUpperCase();
   const candidateCurrency = String(candidate.currency.value ?? "").trim().toUpperCase();
   const bothCurrenciesKnown = Boolean(currentCurrency && candidateCurrency);
   const currencyMatches = bothCurrenciesKnown && currentCurrency === candidateCurrency;
+  const currencyCompatible = !bothCurrenciesKnown || currencyMatches;
+  const extras = () => [
+    ...(dateMatches ? ["date"] : []),
+    ...(currencyMatches ? ["currency"] : []),
+  ];
 
-  if (!amountMatches || (bothDatesKnown && !dateMatches) || (bothCurrenciesKnown && !currencyMatches)) return null;
+  // Same reference (after ignoring spaces, dashes, leading zeros).
+  if (currentNumber && candidateNumber && currentNumber === candidateNumber) {
+    if (bothTotalsKnown && !amountMatches) {
+      // Same number, different amount: a revised invoice or a reused number.
+      return { matchType: "number_reused" as const, signals: ["supplier", "invoice number", "different total"] };
+    }
+    return { matchType: "exact" as const, signals: ["supplier", "invoice number", ...(amountMatches ? ["total"] : []), ...extras()] };
+  }
 
-  const signals = ["supplier", "similar invoice number", "total"];
-  if (dateMatches) signals.push("date");
-  if (currencyMatches) signals.push("currency");
-  return { matchType: "similar_reference" as const, signals };
+  // Slightly changed reference + same money + plausible timing.
+  if (currentNumber && candidateNumber && amountMatches && currencyCompatible && similarInvoiceNumber(currentNumber, candidateNumber)) {
+    // INV-10234 -> INV-10235 with the same amount is usually the next invoice in
+    // a recurring series (rent, subscription). Only flag a digits-only change
+    // when both dates are known and within a week.
+    const digitsOnlyChange = currentNumber.replace(/\d/g, "") === candidateNumber.replace(/\d/g, "");
+    const withinWindow = days === null || days <= NEAR_DUPLICATE_MAX_DAYS;
+    const sequenceLike = digitsOnlyChange && (days === null || days > SEQUENCE_MAX_DAYS);
+    if (withinWindow && !sequenceLike) {
+      return { matchType: "similar_reference" as const, signals: ["supplier", "similar invoice number", "total", ...extras()] };
+    }
+  }
+
+  // Different (or unreadable) number, but same supplier, amount and date.
+  if (amountMatches && dateMatches && currencyCompatible) {
+    return { matchType: "same_amount_date" as const, signals: ["supplier", "total", "date", ...(currencyMatches ? ["currency"] : [])] };
+  }
+
+  return null;
 }
+
+const MATCH_RANK = { exact: 0, number_reused: 1, similar_reference: 2, same_amount_date: 3 } as const;
 
 export async function validateInvoiceForDocument({
   documentId,
@@ -148,7 +189,7 @@ export async function validateInvoiceForDocument({
         documentId: string;
         filename: string;
         invoiceNumber: string;
-        matchType: "exact" | "similar_reference";
+        matchType: "exact" | "similar_reference" | "number_reused" | "same_amount_date";
         signals: string[];
       }
     | null
@@ -158,7 +199,7 @@ export async function validateInvoiceForDocument({
   // A document uploaded in Test-001 must not haunt Test-002/Test-003.
   // If a legacy standalone document has no shipment, we skip duplicate history
   // instead of comparing it against every invoice in the organization.
-  if (organizationId && shipmentId && currentNumber && currentSupplier) {
+  if (organizationId && shipmentId && currentSupplier && (currentNumber || invoiceTotal(data) !== null)) {
     const admin = createAdminClient();
     const { data: rows, error } = await admin
       .from("documents")
@@ -177,6 +218,8 @@ export async function validateInvoiceForDocument({
         if (!extracted) continue;
         const match = duplicateCandidate(data, extracted);
         if (!match) continue;
+        // Keep the strongest match: exact > number reused > changed reference > same amount+date.
+        if (duplicateInvoice && MATCH_RANK[duplicateInvoice.matchType] <= MATCH_RANK[match.matchType]) continue;
         duplicateInvoice = {
           documentId: row.id,
           filename: row.original_filename,
