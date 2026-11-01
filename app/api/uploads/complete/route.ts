@@ -2,7 +2,8 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assertSameOrigin, jsonError } from "@/lib/http";
-import { deleteDocumentObject, getDocumentInfo } from "@/lib/storage";
+import { deleteDocumentObject, downloadDocumentObject, getDocumentInfo } from "@/lib/storage";
+import { findSample, looksLikeSampleName, sha256Hex } from "@/lib/trial";
 import { MAX_UPLOAD_BYTES } from "@/lib/constants";
 import { extractDocumentMarkdown } from "@/lib/ocr";
 import { analyzeInvoice, INVOICE_ENGINE_VERSION } from "@/lib/invoice-runtime";
@@ -48,6 +49,21 @@ export async function POST(request: Request) {
         .eq("id", doc.id)
         .eq("owner_id", user.id);
       return jsonError("Uploaded object failed integrity checks.", 400);
+    }
+
+    // A limit-exempt sample must be byte-identical to the file we ship.
+    if (looksLikeSampleName(doc.original_filename)) {
+      const sample = findSample(doc.original_filename, actual);
+      const hash = sample ? await sha256Hex(await downloadDocumentObject(doc.storage_key)) : "";
+      if (!sample || hash !== sample.sha256) {
+        await deleteDocumentObject(doc.storage_key);
+        await admin
+          .from("documents")
+          .update({ status: "failed", error_message: "Sample file verification failed." })
+          .eq("id", doc.id)
+          .eq("owner_id", user.id);
+        return jsonError("This file is not a Foldline sample invoice.", 400);
+      }
     }
 
     if (actualType && actualType !== doc.content_type) {

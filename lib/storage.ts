@@ -49,3 +49,13 @@ export async function createSignedDocumentDownload(path: string, expiresIn = 300
 
   return data.signedUrl;
 }
+
+export async function downloadDocumentObject(path: string) {
+  const admin = createAdminClient();
+  const { data, error } = await admin.storage
+    .from(DOCUMENT_BUCKET)
+    .download(path);
+
+  if (error || !data) throw new Error("Stored document could not be read.");
+  return data.arrayBuffer();
+}
