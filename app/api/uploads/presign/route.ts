@@ -4,6 +4,7 @@ import { uploadRequestSchema } from "@/lib/schemas";
 import { assertSameOrigin, jsonError } from "@/lib/http";
 import { createSignedDocumentUpload } from "@/lib/storage";
 import { PLAN_LIMITS } from "@/lib/constants";
+import { SAMPLE_PREFIX, findSample, hasAcceptedTrialTerms, looksLikeSampleName } from "@/lib/trial";
 
 export async function POST(request: Request) {
   try { assertSameOrigin(request); } catch (r) { return r as Response; }
@@ -15,18 +16,30 @@ export async function POST(request: Request) {
   if (!parsed.success) return jsonError("Invalid file metadata.");
   const { filename, contentType, size, shipmentId } = parsed.data;
 
+  if (!hasAcceptedTrialTerms(user)) {
+    return jsonError("Please accept the trial terms before uploading.", 428);
+  }
+
+  // Sample invoices never count toward the limit; a "sample" name that is not
+  // one of our exact files is refused so the exemption cannot be abused.
+  const isSample = looksLikeSampleName(filename);
+  if (isSample && !findSample(filename, size)) {
+    return jsonError(`File names starting with "${SAMPLE_PREFIX}" are reserved for Foldline sample invoices.`, 400);
+  }
+
   const { data: sub } = await supabase.from("subscriptions").select("plan").eq("user_id", user.id).maybeSingle();
   const plan = sub?.plan === "pro" ? "pro" : "free";
   const monthlyLimit = PLAN_LIMITS[plan];
 
-  if (monthlyLimit !== null) {
+  if (monthlyLimit !== null && !isSample) {
     const start = new Date();
     start.setUTCDate(1);
     start.setUTCHours(0, 0, 0, 0);
     const { count } = await supabase
       .from("documents")
       .select("id", { count: "exact", head: true })
-      .gte("created_at", start.toISOString());
+      .gte("created_at", start.toISOString())
+      .not("original_filename", "like", `${SAMPLE_PREFIX}%`);
 
     if ((count ?? 0) >= monthlyLimit) {
       return jsonError("Monthly document limit reached. Upgrade or wait for the next cycle.", 402);

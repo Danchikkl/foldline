@@ -5,6 +5,7 @@ import { ArrowLeft, FileText, ShieldAlert, ShieldCheck } from "lucide-react";
 import { requireUser } from "@/lib/auth";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { ShipmentUploadDropzone } from "@/components/shipment-upload-dropzone";
+import { hasAcceptedTrialTerms } from "@/lib/trial";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
@@ -83,7 +84,7 @@ export default async function ShipmentPage({ params }: Props) {
         </header>
 
         <div className="dashGrid">
-          <ShipmentUploadDropzone shipmentId={shipment.id} />
+          <ShipmentUploadDropzone shipmentId={shipment.id} termsAccepted={hasAcceptedTrialTerms(user)} />
 
           <section className="insightCard">
             <span className="eyebrow">Exception queue</span>
