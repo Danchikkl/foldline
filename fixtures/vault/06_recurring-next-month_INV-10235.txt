@@ -1,0 +1,48 @@
+Steppe Build Supply LLP
+BIN 123456789012
+Almaty, Kazakhstan
+
+INVOICE
+Invoice No: INV-10235
+Invoice Date: 12.10.2026
+Bill to: Example Buyer LLP, BIN 111222333444
+Currency: KZT
+Description
+
+Qty
+
+Unit Price
+
+Amount
+
+Cement M400, 50 kg bag
+
+100
+
+2 500,00
+
+250 000,00
+
+Rebar 12 mm, tonnes
+
+1.2
+
+153 199,41
+
+183 839,29
+
+TEST DOCUMENT - fictional company, generated for Foldline testing. Not a real invoice.
+
+Subtotal
+
+KZT 433 839,29
+
+VAT 12%
+
+KZT 52 060,71
+
+Total due
+
+KZT 485 900,00
+
+

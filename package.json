@@ -17,7 +17,9 @@
     "test:http": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/invoice-test-loader.mjs ./scripts/run-http-fixtures.ts",
     "test:gateway": "PYTHONPATH=services/ocr-gateway python3 services/ocr-gateway/test_security.py",
     "check": "npm run typecheck && npm run test:http && npm run test:invoice && npm run build && npm run test:gateway",
-    "cf:build": "opennextjs-cloudflare build"
+    "cf:build": "opennextjs-cloudflare build",
+    "test:vault": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/invoice-test-loader.mjs ./scripts/run-vault-tests.ts",
+    "postinstall": "node scripts/copy-pdf-worker.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1106.0",
@@ -26,6 +28,7 @@
     "@supabase/supabase-js": "2.111.0",
     "lucide-react": "1.30.0",
     "next": "16.4.3",
+    "pdfjs-dist": "6.4.299",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "stripe": "22.4.0",
