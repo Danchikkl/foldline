@@ -21,3 +21,24 @@
 .whereFiles ul{margin:8px 0;padding-left:16px}
 .whereFiles a{text-decoration:underline}
 .buttonDanger{background:#b3261e;color:#fff;border-color:#b3261e}
+
+/* Private workspace (zero-knowledge vault) */
+.vaultGate{max-width:520px;margin:30px auto;display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+.vaultGate h1{font-size:32px;letter-spacing:-.04em;margin:0}
+.vaultGate .authForm{width:100%}
+.vaultPromise{display:flex;gap:10px;align-items:flex-start;background:#eef9f3;color:var(--good);border:1px solid #cfe8d6;border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.5;margin:0 0 16px}
+.vaultPromise svg{flex:0 0 auto;margin-top:1px}
+.vaultWarn{background:#fff6e0;border:1px solid #f0dba6;color:#7d5404;border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.5}
+.vaultMuted{font-size:11px;color:#7d838c}
+.vaultErrors{white-space:pre-line;margin-top:12px}
+.vaultGrid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:14px;align-items:start}
+.vaultRow{width:100%;text-align:left;background:none;border:0;border-bottom:1px solid #eeeae2;font:inherit;cursor:pointer;grid-template-columns:minmax(0,1fr) 120px 70px}
+.vaultRowActive{background:#f5f3ec}
+.vaultDetail{border:1px solid var(--line);border-radius:15px;background:#fff;padding:16px;display:grid;gap:10px;position:sticky;top:16px}
+.vaultDetail h3{margin:0;font-size:14px;overflow-wrap:anywhere}
+.vaultTable{width:100%;border-collapse:collapse;font-size:11px}
+.vaultTable th,.vaultTable td{text-align:left;padding:6px 8px;border-top:1px solid #f0ede6;overflow-wrap:anywhere}
+.vaultTable th{color:#7d838c;font-weight:600;width:80px}
+.vaultCompare h4{margin:4px 0 6px;font-size:12px}
+.vaultActions{justify-content:flex-start}
+@media(max-width:980px){.vaultGrid{grid-template-columns:1fr}.vaultDetail{position:static}}

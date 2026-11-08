@@ -1,0 +1,40 @@
+Aral Logistics LLP
+BIN 456789012345
+Almaty, Kazakhstan
+
+INVOICE
+Invoice No: AL-2026-118
+Invoice Date: 20.09.2026
+Bill to: Example Buyer LLP, BIN 111222333444
+Currency: KZT
+Description
+
+Qty
+
+Unit Price
+
+Amount
+
+Freight Almaty - Astana
+
+2
+
+95 000,00
+
+190 000,00
+
+TEST DOCUMENT - fictional company, generated for Foldline testing. Not a real invoice.
+
+Subtotal
+
+KZT 190 000,00
+
+VAT 12%
+
+KZT 22 800,00
+
+Total due
+
+KZT 220 000,00
+
+

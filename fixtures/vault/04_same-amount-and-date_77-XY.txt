@@ -1,0 +1,40 @@
+Steppe Build Supply LLP
+BIN 123456789012
+Almaty, Kazakhstan
+
+INVOICE
+Invoice No: 77-XY
+Invoice Date: 12.09.2026
+Bill to: Example Buyer LLP, BIN 111222333444
+Currency: KZT
+Description
+
+Qty
+
+Unit Price
+
+Amount
+
+Construction materials as per order
+
+1
+
+433 839,29
+
+433 839,29
+
+TEST DOCUMENT - fictional company, generated for Foldline testing. Not a real invoice.
+
+Subtotal
+
+KZT 433 839,29
+
+VAT 12%
+
+KZT 52 060,71
+
+Total due
+
+KZT 485 900,00
+
+

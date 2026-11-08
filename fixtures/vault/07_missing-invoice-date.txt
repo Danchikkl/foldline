@@ -1,0 +1,39 @@
+Qazaq Net Telecom LLP
+BIN 987654321098
+Almaty, Kazakhstan
+
+INVOICE
+Invoice No: TN-5521
+Bill to: Example Buyer LLP, BIN 111222333444
+Currency: KZT
+Description
+
+Qty
+
+Unit Price
+
+Amount
+
+Leased line 100 Mbps, October
+
+1
+
+180 000,00
+
+180 000,00
+
+TEST DOCUMENT - fictional company, generated for Foldline testing. Not a real invoice.
+
+Subtotal
+
+KZT 180 000,00
+
+VAT 12%
+
+KZT 21 600,00
+
+Total due
+
+KZT 201 600,00
+
+
