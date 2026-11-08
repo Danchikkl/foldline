@@ -14,8 +14,9 @@ type Doc = {
   validation_data: ValidationResult | null;
   error_message: string | null;
   updated_at: string;
+  shipment_id?: string | null;
 };
-type FileResponse = { url?: string };
+type FileResponse = { url?: string; purged?: boolean; error?: string };
 type StatusResponse = { status: string; error_message?: string | null };
 type SaveResponse = { validation?: ValidationResult; error?: string };
 type RetryResponse = { error?: string };
@@ -70,11 +71,33 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
   const [saving, setSaving] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [message, setMessage] = useState("");
+  const [filePurged, setFilePurged] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function deleteDocument() {
+    if (!confirmDelete) { setConfirmDelete(true); return; }
+    setDeleting(true);
+    setMessage("");
+    const response = await fetch(`/api/documents/${doc.id}`, { method: "DELETE" });
+    const body = await response.json().catch(() => ({})) as { error?: string };
+    if (response.ok) {
+      window.location.href = doc.shipment_id ? `/shipments/${doc.shipment_id}` : "/dashboard";
+      return;
+    }
+    setMessage(body.error || "Could not delete this document.");
+    setDeleting(false);
+    setConfirmDelete(false);
+  }
 
   useEffect(() => {
     fetch(`/api/documents/${doc.id}/file`)
-      .then((r) => r.ok ? r.json() : Promise.reject())
-      .then((x) => setFileUrl(((x as FileResponse).url) || ""))
+      .then(async (r) => {
+        const x = await r.json().catch(() => ({})) as FileResponse;
+        if (r.status === 410 && x.purged) { setFilePurged(x.error || "The original file was deleted."); return; }
+        if (!r.ok) throw new Error();
+        setFileUrl(x.url || "");
+      })
       .catch(() => {});
   }, [doc.id]);
 
@@ -212,9 +235,9 @@ export function DocumentReview({ document: doc }: { document: Doc }) {
     : { border: "1px solid #e3cf91", background: "#fff8e6", color: "#6f5516", borderRadius: 10, padding: 12, margin: "14px 0" };
 
   return <div className="reviewPage">
-    <header className="reviewHeader"><div><span className="eyebrow">Invoice review</span><h1>{doc.original_filename}</h1></div><div className="reviewActions"><button className="button buttonGhost" onClick={() => setProof(!proof)}>{proof ? <EyeOff size={16}/> : <Eye size={16}/>} {proof ? "Hide proof" : "Show proof"}</button><a className="button buttonGhost" href={`/api/documents/${doc.id}/export`}><Download size={16}/>CSV</a><button className="button buttonDark" disabled={saving} onClick={() => void save("save")}><Save size={16}/>Save</button><button className="button buttonAccent" disabled={saving || unsupported} onClick={() => void save("approve")}><Check size={16}/>Approve after review</button></div></header>
+    <header className="reviewHeader"><div><span className="eyebrow">Invoice review</span><h1>{doc.original_filename}</h1></div><div className="reviewActions"><button className="button buttonGhost" onClick={() => setProof(!proof)}>{proof ? <EyeOff size={16}/> : <Eye size={16}/>} {proof ? "Hide proof" : "Show proof"}</button><a className="button buttonGhost" href={`/api/documents/${doc.id}/export`}><Download size={16}/>CSV</a><button className="button buttonDark" disabled={saving} onClick={() => void save("save")}><Save size={16}/>Save</button><button className="button buttonAccent" disabled={saving || unsupported} onClick={() => void save("approve")}><Check size={16}/>Approve after review</button><button className={`button ${confirmDelete ? "buttonDanger" : "buttonGhost"}`} disabled={deleting} onClick={() => void deleteDocument()} onBlur={() => setConfirmDelete(false)} title="Delete the original file and all data extracted from it"><Trash2 size={16}/>{deleting ? "Deleting…" : confirmDelete ? "Click again to delete" : "Delete"}</button></div></header>
     {message && <div className="inlineNotice">{message}</div>}
-    <div className="reviewGrid"><section className="previewPanel"><div className="panelTitle"><span>Original</span><span className="secureTag"><ShieldCheck size={14}/>private signed URL</span></div>{fileUrl ? (doc.content_type === "application/pdf" ? <iframe title="Original document" src={fileUrl}/> : <img src={fileUrl} alt="Original document"/>) : <div className="previewLoading">Generating secure preview…</div>}</section>
+    <div className="reviewGrid"><section className="previewPanel"><div className="panelTitle"><span>Original</span><span className="secureTag"><ShieldCheck size={14}/>private signed URL</span></div>{filePurged ? <div className="previewLoading">{filePurged}</div> : fileUrl ? (doc.content_type === "application/pdf" ? <iframe title="Original document" src={fileUrl}/> : <img src={fileUrl} alt="Original document"/>) : <div className="previewLoading">Generating secure preview…</div>}</section>
     <section className="dataPanel">
       <div className="proofToolbar"><div><span className="eyebrow">Invoice check</span><h2>{resultTitle(validation)}</h2>{validation && <p style={{ margin: "5px 0 0", fontSize: 10, color: "#737985" }}>{validation.summary}</p>}</div><label className="switchLabel"><input type="checkbox" checked={exceptionsOnly} onChange={(e)=>setExceptionsOnly(e.target.checked)}/><span/>Only show exceptions</label></div>
 
