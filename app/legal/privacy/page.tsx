@@ -16,8 +16,15 @@ export default function Privacy() {
     <p><strong>Why this information is used.</strong> Account and document data is used to provide the document-review workflow. Pilot request information is used to understand your use case and reply to your request. Foldline does not sell this information to advertisers.</p>
     <p><strong>Storage and processing.</strong> Account data, structured data, pilot requests and original documents are stored using Supabase. Uploaded documents may be converted to machine-readable text through Cloudflare Workers AI as part of the processing workflow.</p>
     <p><strong>Access.</strong> Original documents are kept in private storage and accessed through short-lived signed links. Database access is restricted with authenticated server logic and row-level policies where applicable.</p>
+    <section id="private-workspace" className="legalSection">
+      <h2>Private workspace (zero-knowledge)</h2>
+      <p><strong>What stays on your device.</strong> In the private workspace, invoice files are read and checked in your browser. The file and its text are not sent to Foldline or to Cloudflare Workers AI.</p>
+      <p><strong>What we store.</strong> Only encrypted records, plus the salt and wrapped key needed to unlock them with your passphrase. Records are encrypted with AES-256-GCM using a key derived from your workspace passphrase. We never receive the passphrase and cannot decrypt the records.</p>
+      <p><strong>What we can still see.</strong> Your account email, which workspace the records belong to, how many records exist, their approximate size and when they were saved.</p>
+      <p><strong>Recovery.</strong> Because we cannot decrypt your data, we cannot recover it if the passphrase is lost.</p>
+    </section>
     <section id="retention" className="legalSection">
-      <h2>Where your files go and how long they are kept</h2>
+      <h2>Standard workspace: where your files go and how long they are kept</h2>
       <p><strong>Storage.</strong> Original documents and extracted data are stored privately with Supabase. Documents are visible only to members of your workspace, enforced by database row-level security, and opened through signed links that expire after 5 minutes.</p>
       <p><strong>Processing.</strong> Documents are converted to text using Cloudflare Workers AI. They are not used to train AI models and are never sold or shared for marketing.</p>
       <p><strong>Retention.</strong> The original file and its full extracted text are deleted automatically {RETENTION_DAYS} days after upload. Extracted fields (supplier, invoice number, date, amounts, line items) and check results are kept while your account is active, because duplicate checks and the review audit trail depend on them.</p>
