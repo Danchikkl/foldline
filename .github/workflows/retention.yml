@@ -1,0 +1,21 @@
+name: Data retention
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  purge-old-originals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete originals older than the retention window
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          RETENTION_SECRET: ${{ secrets.RETENTION_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$RETENTION_SECRET" ]; then
+            echo "::warning::Set the APP_URL variable and RETENTION_SECRET secret to enable retention."
+            exit 0
+          fi
+          curl -fsS -X POST "$APP_URL/api/maintenance/retention" -H "x-retention-secret: $RETENTION_SECRET"

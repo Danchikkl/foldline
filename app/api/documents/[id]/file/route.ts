@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createSignedDocumentDownload } from "@/lib/storage";
 import { jsonError } from "@/lib/http";
+import { isPurged, RETENTION_DAYS } from "@/lib/retention";
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -18,6 +19,12 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
     .maybeSingle();
 
   if (!doc?.storage_key) return jsonError("Not found", 404);
+  if (isPurged(doc.storage_key)) {
+    return Response.json(
+      { purged: true, error: `The original file was deleted after ${RETENTION_DAYS} days. Extracted fields and check results are kept.` },
+      { status: 410, headers: { "cache-control": "no-store" } },
+    );
+  }
 
   try {
     const url = await createSignedDocumentDownload(doc.storage_key, 300);

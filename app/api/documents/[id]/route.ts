@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { assertSameOrigin, jsonError } from "@/lib/http";
 import { documentPatchSchema } from "@/lib/schemas";
 import { validateInvoiceForDocument } from "@/lib/invoice-history";
+import { deleteAndVerify } from "@/lib/retention";
 
 const STALE_PROCESSING_MS = 2 * 60 * 1000;
 
@@ -112,4 +113,41 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   });
 
   return Response.json({ ok: true, validation });
+}
+
+/**
+ * Deletes a document for real: the stored original is removed and verified
+ * gone from active storage, then the row (fields, text, checks) is deleted.
+ * Access goes through the user's own RLS-scoped client, so only members of the
+ * document's organization can delete it.
+ */
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  try { assertSameOrigin(request); } catch (r) { return r as Response; }
+  const { id } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return jsonError("Unauthorized", 401);
+
+  const { data: doc } = await supabase
+    .from("documents")
+    .select("id,storage_key,organization_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (!doc) return jsonError("Not found.", 404);
+
+  const removed = await deleteAndVerify(doc.storage_key);
+  if (!removed) return jsonError("Could not delete the original file. Nothing was removed; try again.", 502);
+
+  const admin = createAdminClient();
+  const { error } = await admin.from("documents").delete().eq("id", id).eq("organization_id", doc.organization_id);
+  if (error) return jsonError("The original file was deleted, but the record could not be. Try again.", 500);
+
+  await admin.from("audit_events").insert({
+    user_id: user.id,
+    document_id: null,
+    event_type: "document.deleted",
+    metadata: { document_id: id, original_deleted: true },
+  });
+
+  return Response.json({ ok: true, deleted: id, originalDeleted: true });
 }
