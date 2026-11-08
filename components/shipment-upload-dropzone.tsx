@@ -147,6 +147,7 @@ export function ShipmentUploadDropzone({ shipmentId, termsAccepted = false }: { 
       {!busy && <details className="whereFiles">
         <summary>Where your files go</summary>
         <ul>
+          <li><b>Want us to never see the file?</b> Use the <Link href="/vault">private workspace</Link>: invoices are read and checked on your device and stored encrypted with a passphrase only you know.</li>
           <li>Stored privately with Supabase, visible only to your workspace, opened through links that expire in 5 minutes.</li>
           <li>Converted to text by Cloudflare Workers AI. Never used to train AI models and never sold.</li>
           <li>The original file and its full text are deleted automatically after {RETENTION_DAYS} days. Supplier, number, date and amounts are kept for duplicate checks.</li>
