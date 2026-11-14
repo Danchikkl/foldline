@@ -6,6 +6,6 @@ import { VaultWorkspace } from "@/components/vault-workspace";
 export const metadata: Metadata = { title: "Private workspace", robots: { index: false, follow: false } };
 
 export default async function VaultPage() {
-  const { user } = await requireUser();
+  const { user } = await requireUser("/vault");
   return <DashboardShell email={user.email || "account"}><VaultWorkspace /></DashboardShell>;
 }

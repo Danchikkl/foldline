@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/browser";
+import { safeNext } from "@/lib/safe-next";
 
 export function AuthForm({ mode }: { mode: "login" | "signup" }) {
   const [email, setEmail] = useState("");
@@ -13,6 +14,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const nextPath = () => safeNext(typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("next"));
 
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setError(""); setMessage("");
@@ -20,16 +22,18 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
     setLoading(true);
     const supabase = createClient();
     if (mode === "signup") {
+      // Remembered for the email-confirmation callback (same browser); harmless if absent.
+      document.cookie = `fl_next=${encodeURIComponent(nextPath())}; path=/; max-age=86400; samesite=lax; secure`;
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email, password,
         options: { data: { full_name: name.trim().slice(0, 100) }, emailRedirectTo: `${window.location.origin}/auth/callback` },
       });
       if (authError) setError(authError.message);
-      else if (authData.session) { router.push("/dashboard"); router.refresh(); }
+      else if (authData.session) { router.push(nextPath()); router.refresh(); }
       else { router.push("/thank-you?type=signup"); router.refresh(); }
     } else {
       const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
-      if (authError) setError(authError.message); else { router.push("/dashboard"); router.refresh(); }
+      if (authError) setError(authError.message); else { router.push(nextPath()); router.refresh(); }
     }
     setLoading(false);
   }
@@ -41,6 +45,6 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
     {error && <div className="formError" role="alert">{error}</div>}
     {message && <div className="formSuccess" role="status">{message}</div>}
     <button className="button buttonAccent buttonWide" disabled={loading}>{loading ? "Working…" : mode === "signup" ? "Create workspace" : "Log in"}</button>
-    <p className="authSwitch">{mode === "signup" ? <>Already have an account? <Link href="/login">Log in</Link></> : <>New to Foldline? <Link href="/signup">Create account</Link></>}</p>
+    <p className="authSwitch">{mode === "signup" ? <>Already have an account? <Link href={typeof window === "undefined" ? "/login" : `/login${window.location.search}`}>Log in</Link></> : <>New to Foldline? <Link href={typeof window === "undefined" ? "/signup" : `/signup${window.location.search}`}>Create account</Link></>}</p>
   </form>;
 }
