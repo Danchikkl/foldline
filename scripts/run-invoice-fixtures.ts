@@ -238,4 +238,162 @@ expect(
   `Got extraction=${cloudflareAnalysis.extraction.status} (${cloudflareAnalysis.extraction.issues.join("; ")}), risk=${cloudflareCheck.risk_level}.`,
 );
 
+
+// ---- English-language invoices (US / UK / AU / CA) ----
+const intl = (text: string) => {
+  const a = analyzeInvoice(text);
+  const check = validateInvoiceBusiness(a.data, { extraction: a.extraction, duplicateInvoice: null });
+  return { ...a, check, f: (k: "supplier_name" | "invoice_number" | "invoice_date" | "currency" | "subtotal" | "vat" | "total") => a.data[k].value };
+};
+const fields = (r: ReturnType<typeof intl>) => JSON.stringify([r.f("supplier_name"), r.f("invoice_number"), r.f("invoice_date"), r.f("currency"), r.f("subtotal"), r.f("vat"), r.f("total"), r.extraction.status, r.check.risk_level]);
+
+const usInvoice = intl(`Greenfield Plumbing LLC
+1200 Oak Street, Austin, TX 78701
+
+INVOICE
+Invoice #: GP-20418
+Invoice Date: 11/25/2026
+Due Date: 12/25/2026
+Terms: Net 30
+
+Bill To:
+Lakeside Property Management Inc.
+
+Description                 Qty   Rate      Amount
+Emergency leak repair       3     $185.00   $555.00
+Replacement valve           1     $94.50    $94.50
+
+Subtotal   $649.50
+Sales Tax (8.25%)   $53.58
+Total   $703.08
+Amount Due   $703.08`);
+expect("US invoice: Sales Tax is read and 'Net 30' is not money",
+  usInvoice.f("subtotal") === 649.5 && usInvoice.f("vat") === 53.58 && usInvoice.f("total") === 703.08 && usInvoice.extraction.status === "reliable" && usInvoice.check.risk_level === "low", fields(usInvoice));
+
+const ukInvoice = intl(`Northgate Cleaning Services Ltd
+VAT Reg No: GB 123 4567 89
+Invoice No. NCS/2026/0871
+Date: 3 November 2026
+To: Mint Offices Limited
+
+Office cleaning - October 2026     1   £1,250.00   £1,250.00
+Net   £1,250.00
+VAT @ 20%   £250.00
+Total due   £1,500.00
+Please pay within 14 days. Sort code 20-00-00 Account 12345678`);
+expect("UK invoice: £ totals, written date, VAT number is not the VAT amount",
+  ukInvoice.f("subtotal") === 1250 && ukInvoice.f("vat") === 250 && ukInvoice.f("total") === 1500 && ukInvoice.f("invoice_date") === "2026-11-03" && ukInvoice.f("currency") === "GBP", fields(ukInvoice));
+
+const auInvoice = intl(`TAX INVOICE
+Coastal Electrical Pty Ltd  ABN 51 824 753 556
+Invoice Number: INV-00932
+Issue Date: 14/10/2026
+Customer: Harbour Cafe Group
+Switchboard upgrade  1  2,400.00  2,400.00
+Subtotal 2,400.00
+GST 10% 240.00
+Total AUD 2,640.00
+Balance Due AUD 2,640.00`);
+expect("AU invoice: heading is not the supplier, ABN is not the GST amount",
+  auInvoice.f("supplier_name") === "Coastal Electrical Pty Ltd" && auInvoice.f("vat") === 240 && auInvoice.f("total") === 2640 && auInvoice.f("currency") === "AUD" && auInvoice.check.risk_level === "low", fields(auInvoice));
+
+const caInvoice = intl(`Maple Leaf Janitorial Ltd.
+INVOICE
+Invoice No: ML-2291
+Invoice Date: 2026-09-15
+Bill To: Harbourfront Realty
+Description Qty Rate Amount
+Nightly cleaning - September 1 1,000.00 1,000.00
+Subtotal 1,000.00
+GST (5%) 50.00
+PST (7%) 70.00
+Total CAD 1,120.00`);
+expect("CA invoice: GST + PST are added together", caInvoice.f("vat") === 120 && caInvoice.f("total") === 1120 && caInvoice.check.risk_level === "low", fields(caInvoice));
+
+const partPaid = intl(`Summit HVAC Services Inc.
+INVOICE
+Invoice # 7731
+Date: 10/02/2026
+Bill To: Oakwood Dental Group
+Description Qty Unit Price Amount
+Quarterly maintenance 1 $500.00 $500.00
+Subtotal $500.00
+Tax $0.00
+Total $500.00
+Amount Paid $200.00
+Balance Due $300.00
+Terms: Net 30`);
+expect("Part-paid invoice: the invoice total is used, not the balance due", partPaid.f("total") === 500 && partPaid.check.risk_level === "low", fields(partPaid));
+
+const twoColumn = intl(`Brightline Landscaping LLC
+Invoice
+Invoice Number: BL-0456            Invoice Date: Oct 7, 2026
+Bill To: Cedar Park HOA            Due Date: Nov 6, 2026
+Item Description Qty Price Amount
+Mowing and edging 4 75.00 300.00
+Mulch delivery 1 220.00 220.00
+Thank you for your business!       Subtotal 520.00
+Payment due within 30 days         Sales Tax 8% 41.60
+Make checks payable to Brightline  Total Due $561.60`);
+expect("Two-column footer: totals and the invoice date (not the due date) are read",
+  twoColumn.f("total") === 561.6 && twoColumn.f("vat") === 41.6 && twoColumn.f("invoice_date") === "2026-10-07", fields(twoColumn));
+
+const wrongSum = intl(`Delta Office Supply Inc.
+INVOICE
+Invoice #: D-5512
+Date: 09/18/2026
+Bill To: Northside Clinic
+Description Qty Unit Price Amount
+Paper A4 20 6.00 120.00
+Toner 2 80.00 160.00
+Subtotal $280.00
+Sales Tax $22.40
+Total $322.40`);
+expect("A $20 arithmetic error on a US invoice is an issue", wrongSum.check.risk_level === "high", fields(wrongSum));
+
+const smallGap = intl(`Delta Office Supply Inc.
+INVOICE
+Invoice #: D-5513
+Date: 09/18/2026
+Bill To: Northside Clinic
+Description Qty Unit Price Amount
+Paper A4 20 6.00 120.00
+Toner 2 80.00 160.00
+Subtotal $280.00
+Sales Tax $22.40
+Total $304.40`);
+expect("A $2 overcharge is caught (no 1% tolerance)", smallGap.check.risk_level === "high", fields(smallGap));
+
+const padded = intl(`Delta Office Supply Inc.
+INVOICE
+Invoice #: D-5514
+Date: 09/18/2026
+Bill To: Northside Clinic
+Description Qty Unit Price Amount
+Paper A4 20 $6.00 $120.00
+Toner 2 $80.00 $160.00
+Subtotal $300.00
+Sales Tax $24.00
+Total $324.00`);
+expect("Padded subtotal (rows sum to 280, subtotal says 300) is an issue when every row was read",
+  padded.data.line_items.length === 2 && ["medium", "high"].includes(padded.check.risk_level), fields(padded) + JSON.stringify(padded.extraction.signals));
+
+// ---- Duplicate rules for international data ----
+const us = (number: string, date: string, total: string, supplier = "Greenfield Plumbing LLC") => analyzeInvoice(`${supplier}
+INVOICE
+Invoice #: ${number}
+Invoice Date: ${date}
+Bill To: Lakeside Property Management Inc.
+Description Qty Rate Amount
+Leak repair 1 ${total} ${total}
+Total ${total}`).data;
+const kind = (a: ReturnType<typeof us>, b: ReturnType<typeof us>) => duplicateCandidate(a, b)?.matchType ?? "none";
+const usBase = us("GP-20418", "11/25/2026", "$703.08");
+expect("US date 11/25/2026: a suffixed resend three days later is flagged", kind(us("GP-20418A", "11/28/2026", "$703.08"), usBase) === "similar_reference", kind(us("GP-20418A", "11/28/2026", "$703.08"), usBase));
+expect("Letter O typed for zero (GP-2O418) is the same invoice", kind(us("GP-2O418", "11/25/2026", "$703.08"), usBase) === "exact", kind(us("GP-2O418", "11/25/2026", "$703.08"), usBase));
+expect("'Greenfield Plumbing, L.L.C.' is the same supplier as 'Greenfield Plumbing LLC'", kind(us("GP-20418", "11/25/2026", "$703.08", "Greenfield Plumbing, L.L.C."), usBase) === "exact", kind(us("GP-20418", "11/25/2026", "$703.08", "Greenfield Plumbing, L.L.C."), usBase));
+expect("Same day, $9.50 vs $10.20 from one supplier is NOT a duplicate", kind(us("A-100", "11/25/2026", "$9.50"), us("B-200", "11/25/2026", "$10.20")) === "none", kind(us("A-100", "11/25/2026", "$9.50"), us("B-200", "11/25/2026", "$10.20")));
+expect("Written and numeric dates for the same day match", kind(us("X-1", "November 25, 2026", "$703.08"), us("Y-2", "11/25/2026", "$703.08")) === "same_amount_date", kind(us("X-1", "November 25, 2026", "$703.08"), us("Y-2", "11/25/2026", "$703.08")));
+expect("Next month's GP-20419 with the same amount is NOT a duplicate", kind(us("GP-20419", "12/25/2026", "$703.08"), usBase) === "none", kind(us("GP-20419", "12/25/2026", "$703.08"), usBase));
+
 if (results.some((result) => !result.passed) || regressionFailed) process.exit(1);

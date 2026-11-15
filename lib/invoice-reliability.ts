@@ -1,5 +1,7 @@
 import type { EvidenceValue, InvoiceData, LineItem } from "@/lib/invoice";
 import { extractInvoice as extractInvoiceSemantic } from "@/lib/invoice-v2";
+import { countTableRows, isJunkRow, refineInternational, stripCurrencySymbols } from "@/lib/invoice-intl";
+import { dateCandidates } from "@/lib/dates";
 import {
   analyzeInvoice as analyzeInvoiceBase,
   assessStructuredInvoice as assessStructuredInvoiceBase,
@@ -13,7 +15,7 @@ import {
   type ValidationResult,
 } from "@/lib/invoice-engine";
 
-export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-08-30.1";
+export const INVOICE_ENGINE_VERSION = "invoice-reliability-2026-11-15.1";
 
 export type {
   CheckStatus,
@@ -30,7 +32,7 @@ function compact(value: unknown) {
 }
 
 function close(a: number, b: number) {
-  return Math.abs(a - b) <= Math.max(1, Math.abs(b) * 0.01);
+  return Math.abs(a - b) <= Math.max(0.05, Math.min(2, Math.abs(b) * 0.001));
 }
 
 function parseMoneyToken(raw: string) {
@@ -284,8 +286,8 @@ function strongStructuredInvoiceEvidence(data: InvoiceData) {
   const secondarySignals = [
     validSupplier(data),
     /^\d{12}$/.test(compact(data.supplier_bin.value)),
-    /\d{1,4}[./-]\d{1,2}[./-]\d{1,4}/.test(compact(data.invoice_date.value)),
-    /^(?:KZT|USD|EUR|RUB)$/i.test(compact(data.currency.value)),
+    dateCandidates(data.invoice_date.value).length > 0,
+    /^[A-Z]{3}$/i.test(compact(data.currency.value)),
     validTotal(data),
     data.line_items.some(validRowShape),
   ].filter(Boolean).length;
@@ -345,7 +347,7 @@ function normalizeExtraction(
   if (!validTotal(data)) missing.push("total could not be read reliably.");
   // AP cannot process an invoice without a date (duplicate checks, payment terms,
   // tax period). Missing or unreadable → human review, unless a human confirmed it.
-  if (!humanConfirmed && String(data.invoice_date.value ?? "").trim().length < 6) missing.push("invoice date is missing or unreadable.");
+  if (!humanConfirmed && dateCandidates(data.invoice_date.value).length === 0) missing.push("invoice date is missing or unreadable.");
 
   const unresolvedMoneyConflict = moneyConflict && !strongArithmetic;
   const unresolvedLineConflict = lineConflict && arithmetic.validRows > 0 && !arithmetic.lineSumReconciles;
@@ -405,6 +407,45 @@ function riskFromChecks(checks: ValidationCheck[]) {
   return { failures, riskLevel, riskScore };
 }
 
+const ALL_ROWS_READ = "line items: every visible table row was read";
+
+// Rows that do not add up only prove an error when every visible table row was read.
+function markRowCompleteness(rawText: string, data: InvoiceData, assessment: ExtractionAssessment): ExtractionAssessment {
+  if (!rawText) return assessment;
+  const visibleRows = countTableRows(rawText);
+  const parsedRows = data.line_items.filter(validRowShape).length;
+  if (visibleRows === null || visibleRows !== parsedRows) return assessment;
+  return { ...assessment, signals: [...new Set([...assessment.signals, ALL_ROWS_READ])] };
+}
+
+function rowsReconcile(items: LineItem[], data: InvoiceData) {
+  const rows = items.filter(validRowShape);
+  if (!rows.length) return false;
+  const sum = rows.reduce((total, item) => total + (item.amount ?? 0), 0);
+  const subtotal = typeof data.subtotal.value === "number" ? data.subtotal.value : null;
+  const vat = typeof data.vat.value === "number" ? data.vat.value : null;
+  const total = typeof data.total.value === "number" ? data.total.value : null;
+  return (subtotal !== null && close(sum, subtotal))
+    || (subtotal === null && total !== null && close(sum + (vat ?? 0), total));
+}
+
+/**
+ * Picks the row set that adds up to the invoice's own totals. Amounts written
+ * as "$185.00" are re-parsed from a symbol-free copy; registration numbers and
+ * bank details are never rows.
+ */
+function bestLineItems(rawText: string, data: InvoiceData): LineItem[] {
+  const tidy = (items: LineItem[]) => items.filter((item) => !isJunkRow(item.description));
+  const current = tidy(data.line_items);
+  if (rowsReconcile(current, data)) return current;
+  const stripped = stripCurrencySymbols(rawText);
+  if (stripped === rawText) return current;
+  const candidates = [tidy(analyzeInvoiceBase(stripped).data.line_items), tidy(extractInvoiceSemantic(stripped).line_items)];
+  const reconciled = candidates.find((items) => rowsReconcile(items, data));
+  if (reconciled) return reconciled;
+  return candidates.reduce((best, items) => (items.filter(validRowShape).length > best.filter(validRowShape).length ? items : best), current);
+}
+
 export function analyzeInvoice(rawText: string) {
   const base = analyzeInvoiceBase(rawText);
   const semantic = extractInvoiceSemantic(rawText);
@@ -413,7 +454,8 @@ export function analyzeInvoice(rawText: string) {
   const selected: InvoiceData = useSemanticRows
     ? { ...base.data, line_items: semantic.line_items }
     : base.data;
-  const data = recoverCriticalMoney(rawText, sanitizePoReference(selected, rawText));
+  const refined = refineInternational(rawText, recoverCriticalMoney(rawText, sanitizePoReference(selected, rawText)));
+  const data = { ...refined.data, line_items: bestLineItems(rawText, refined.data) };
 
   if (explicitlyNotInvoice(rawText)) {
     return {
@@ -428,13 +470,17 @@ export function analyzeInvoice(rawText: string) {
     };
   }
 
-  const carriedIssues = base.extraction.issues.filter((issue) => !/^line items:/i.test(issue));
+  // Money conflicts are re-judged against the refined values, not the first reading.
+  const carriedIssues = [
+    ...base.extraction.issues.filter((issue) => !/^line items:/i.test(issue) && !/could not be read reliably/i.test(issue) && !/^(?:subtotal|vat|total):.*strategies disagree/i.test(issue)),
+    ...refined.issues,
+  ];
   const reassessed = assessStructuredInvoiceBase(data, rawText, false, carriedIssues);
   const normalized = normalizeExtraction(data, reassessed, false);
 
   return {
     data,
-    extraction: guardMissingLineItems(rawText, data, normalized),
+    extraction: markRowCompleteness(rawText, data, guardMissingLineItems(rawText, data, normalized)),
   };
 }
 
@@ -446,7 +492,7 @@ export function assessStructuredInvoice(
 ) {
   const base = assessStructuredInvoiceBase(data, rawText, false, extraIssues);
   const normalized = normalizeExtraction(data, base, humanConfirmed);
-  return humanConfirmed ? normalized : guardMissingLineItems(rawText, data, normalized);
+  return humanConfirmed ? normalized : markRowCompleteness(rawText, data, guardMissingLineItems(rawText, data, normalized));
 }
 
 function arithmeticCheckRan(checks: ValidationCheck[]) {
@@ -469,7 +515,20 @@ export function validateInvoiceBusiness(data: InvoiceData, context: ValidationCo
     humanConfirmed: false,
     extraction,
   });
-  const checks = base.checks;
+  // "Rows don't add up" is only a finding when we know every row was read (or a
+  // person confirmed them). Otherwise it means we may have missed a row: review.
+  const rowsComplete = humanConfirmed || extraction.signals.includes(ALL_ROWS_READ);
+  const totalsPass = base.checks.some((item) => item.id === "totals" && item.status === "pass");
+  const checks = base.checks.map((item) => (
+    item.id === "line-sum" && item.status === "fail" && !rowsComplete && totalsPass
+      ? { ...item, status: "skipped" as const, severity: "info" as const, message: `${item.message} Some rows may not have been read, so this needs a person to check.` }
+      : item
+  ));
+  const rowsUncertain = checks.some((item) => item.id === "line-sum" && item.status === "skipped" && /may not have been read/.test(item.message));
+  if (rowsUncertain && extraction.status === "reliable") {
+    extraction.status = "needs_review";
+    extraction.issues = [...new Set([...extraction.issues, "Line items do not add up to the invoice subtotal; some rows may not have been read."])];
+  }
   const { failures, riskLevel, riskScore } = riskFromChecks(checks);
   const duplicateFailure = checks.some((item) => item.id === "duplicate-invoice-number" && item.status === "fail");
   const enoughBusinessEvidence = arithmeticCheckRan(checks) || duplicateFailure;

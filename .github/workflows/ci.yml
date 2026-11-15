@@ -17,6 +17,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:http
       - run: npm run test:invoice
+      - run: npm run test:vault
+      - run: npm run test:ledger
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
   gateway:

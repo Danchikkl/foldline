@@ -13,6 +13,11 @@ const securityHeaders = [
   ...(isProd ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains; preload" }] : []),
 ];
 
+// Every page: no framing, no plugins, no <base> hijack, forms post only here.
+// (Script/connect rules stay off outside the vault: those pages load Supabase
+// and analytics, and a wrong rule there would break sign-in and uploads.)
+const baselineCsp = "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'";
+
 // The private workspace decrypts invoices in the page, so it gets a strict
 // policy: no third-party scripts, and the page may only talk to this site and
 // Supabase. Even an injected script could not send decrypted data elsewhere.
@@ -23,7 +28,9 @@ const vaultCsp = [
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
   "worker-src 'self' blob:",
-  `connect-src 'self' https://*.supabase.co${isProd ? "" : " ws: http://localhost:*"}`,
+  // Only this site. The vault uses Foldline's own API, never a third party, so
+  // even an injected script has nowhere to send decrypted data with fetch/XHR.
+  `connect-src 'self'${isProd ? "" : " ws: http://localhost:*"}`,
   "frame-src 'none'",
   "frame-ancestors 'none'",
   "object-src 'none'",
@@ -37,8 +44,9 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       { source: "/(.*)", headers: securityHeaders },
-      { source: "/vault", headers: [{ key: "Content-Security-Policy", value: vaultCsp }] },
-      { source: "/vault/:path*", headers: [{ key: "Content-Security-Policy", value: vaultCsp }] },
+      { source: "/((?!vault).*)", headers: [{ key: "Content-Security-Policy", value: baselineCsp }] },
+      { source: "/vault", headers: [{ key: "Content-Security-Policy", value: vaultCsp }, { key: "Cache-Control", value: "no-store" }] },
+      { source: "/vault/:path*", headers: [{ key: "Content-Security-Policy", value: vaultCsp }, { key: "Cache-Control", value: "no-store" }] },
     ];
   },
 };

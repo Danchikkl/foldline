@@ -139,7 +139,7 @@ function parseCurrency(text: string): EvidenceValue {
 }
 
 function close(a: number, b: number) {
-  return Math.abs(a - b) <= Math.max(1, Math.abs(b) * 0.01);
+  return Math.abs(a - b) <= Math.max(0.05, Math.min(2, Math.abs(b) * 0.001));
 }
 
 function makeLineItem(

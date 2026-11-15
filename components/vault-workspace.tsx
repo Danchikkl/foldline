@@ -63,7 +63,14 @@ export function VaultWorkspace() {
   }, []);
 
   async function loadRecords(key: CryptoKey, organizationId: string) {
-    const { records } = await api<{ records: { id: string; iv: string; ciphertext: string }[] }>("/api/vault/records");
+    type Page = { records: { id: string; iv: string; ciphertext: string }[]; next: number | null };
+    const records: Page["records"] = [];
+    // Every page is loaded: an invoice missing from the history could hide a duplicate.
+    for (let offset: number | null = 0; offset !== null;) {
+      const page: Page = await api<Page>(`/api/vault/records?offset=${offset}`);
+      records.push(...page.records);
+      offset = page.next;
+    }
     const out: Row[] = [];
     for (const r of records) {
       try {
@@ -213,7 +220,7 @@ export function VaultWorkspace() {
       <input ref={input} type="file" hidden multiple accept="application/pdf" onChange={(e) => void processFiles(Array.from(e.target.files ?? []))} />
       <div className="dropIcon"><FileUp size={25}/></div>
       <h3>{busy || "Drop supplier invoices (PDF)"}</h3>
-      <p>Checked on this device against every earlier invoice in this workspace. Upload in the order received.</p>
+      <p>Checked on this device against every earlier invoice in this workspace. Upload in the order received. Have a year of paid bills as a spreadsheet? <a className="inlineTextLink" href="/vault/audit">Run a paid-twice audit</a>.</p>
       {!busy && <div className="dropActions"><button className="button buttonDark" onClick={() => input.current?.click()}>Choose invoices</button><button className="button buttonGhost" onClick={() => void trySamples()}><FlaskConical size={15}/> Try with sample invoices</button></div>}
     </section>
     {error && <div className="formError vaultErrors" role="alert">{error}</div>}
