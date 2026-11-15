@@ -14,13 +14,14 @@ const zk = [
   ["Read on your device", "In the private workspace, PDFs are read by your browser. The invoice file is never uploaded to Foldline."],
   ["Checked on your device", "Duplicate and arithmetic checks run in your browser against your decrypted invoice history."],
   ["Encrypted before it is saved", "Each result is encrypted with AES-256-GCM before it leaves the browser. The key comes from a workspace passphrase (PBKDF2-SHA256, 600,000 iterations) that is never sent to us."],
+  ["Spreadsheets are not stored at all", "The paid-twice audit reads a CSV or Excel export in your browser and keeps nothing: no upload, no saved copy, not even an encrypted one."],
   ["Unreadable on our side", "Foldline's database holds only ciphertext. A leaked database, a curious employee or a subpoena gets data we cannot decrypt."],
 ] as const;
 
 const limits = [
   "If you lose the passphrase, the data cannot be recovered. There is no reset, by design.",
   "Scanned, image-only PDFs are not supported in the private workspace yet.",
-  "You still rely on the code our site serves. We protect our hosting and code accounts with two-factor authentication and lock the page down with a strict Content Security Policy, but this is the honest limit of any browser-based encryption.",
+  "You still rely on the code our site serves. We protect our hosting and code accounts with two-factor authentication and lock the page down with a strict Content Security Policy (it can only talk to Foldline, and refuses to open if that policy is missing), but this is the honest limit of any browser-based encryption.",
 ];
 
 const controls = [

@@ -385,7 +385,7 @@ export function extractInvoice(rawText: string): InvoiceData {
 }
 
 const num = (v: EvidenceValue) => (typeof v.value === "number" ? v.value : null);
-const close = (a: number, b: number) => Math.abs(a - b) <= Math.max(1, Math.abs(b) * 0.01);
+const close = (a: number, b: number) => Math.abs(a - b) <= Math.max(0.05, Math.min(2, Math.abs(b) * 0.001));
 
 export function validateInvoice(data: InvoiceData, context: InvoiceValidationContext = {}): ValidationResult {
   const checks: ValidationCheck[] = [];

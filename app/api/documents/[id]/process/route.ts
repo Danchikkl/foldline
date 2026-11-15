@@ -112,6 +112,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       .eq("id", id)
       .eq("owner_id", user.id);
 
-    return jsonError(message, 502);
+    return jsonError("Document processing failed. Please try again.", 502);
   }
 }

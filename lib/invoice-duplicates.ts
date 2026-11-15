@@ -3,12 +3,17 @@
  * for the zero-knowledge workspace, in the browser against decrypted history.
  */
 import type { InvoiceData } from "@/lib/invoice";
+import { dateCandidates, dayDistance } from "@/lib/dates";
+
+// Cyrillic letters that look identical to Latin ones (typed on the wrong layout).
+const CYRILLIC_LOOKALIKES: Record<string, string> = { "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X", "У": "Y" };
 
 export function normalizeInvoiceNumber(value: unknown) {
   return String(value ?? "")
     .normalize("NFKC")
     .trim()
     .toUpperCase()
+    .replace(/[АВЕКМНОРСТХУ]/g, (c) => CYRILLIC_LOOKALIKES[c] ?? c)
     .replace(/(^|[^0-9])0+(?=\d)/g, "$1")
     .replace(/[\s._'’`-]+/g, "")
     .replace(/[^A-ZА-ЯЁ0-9]/g, "");
@@ -19,8 +24,43 @@ function normalizeSupplierName(value: unknown) {
     .normalize("NFKC")
     .trim()
     .toUpperCase()
-    .replace(/\b(?:LLP|LTD|LIMITED|INC|CORP|CORPORATION|TOO|ТОО|ИП)\b/g, "")
+    .replace(/&/g, " AND ")
+    .replace(/(?<![A-ZА-ЯЁ0-9])(?:LLP|LLC|L\.L\.C|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|PLC|PTY|GMBH|AG|BV|NV|SA|SRL|SARL|OY|AB|AS|THE|AND|TOO|ТОО|ИП|ООО|АО)(?![A-ZА-ЯЁ0-9])\.?/g, " ")
     .replace(/[^A-ZА-ЯЁ0-9]/g, "");
+}
+
+/** Supplier name with legal forms, case and punctuation removed; "" when too short to trust. */
+export function supplierNameKey(value: unknown) {
+  const key = normalizeSupplierName(value);
+  return key.length >= 3 ? key : "";
+}
+
+/** Invoice reference with punctuation, leading zeros and look-alike characters folded. */
+export function invoiceNumberKey(value: unknown) {
+  return foldConfusables(normalizeInvoiceNumber(value));
+}
+
+/**
+ * Letters and digits that get swapped when a number is retyped or re-read:
+ * O/0, I/L/1, S/5, B/8, Z/2. Folding both sides catches INV-1O234 vs INV-10234.
+ */
+function foldConfusables(normalized: string): string {
+  return normalized.replace(/O/g, "0").replace(/[IL]/g, "1").replace(/S/g, "5").replace(/B/g, "8").replace(/Z/g, "2");
+}
+
+function supplierBin(data: InvoiceData) {
+  const bin = String(data.supplier_bin.value ?? "").replace(/\s/g, "");
+  return /^\d{9,12}$/.test(bin) ? bin : "";
+}
+
+/** Same registration number, or (when either side has none) the same normalized name. */
+export function sameSupplier(a: InvoiceData, b: InvoiceData) {
+  const binA = supplierBin(a);
+  const binB = supplierBin(b);
+  if (binA && binB) return binA === binB;
+  const nameA = normalizeSupplierName(a.supplier_name.value);
+  const nameB = normalizeSupplierName(b.supplier_name.value);
+  return nameA.length >= 3 && nameA === nameB;
 }
 
 export function supplierKey(data: InvoiceData) {
@@ -43,17 +83,8 @@ export function invoiceTotal(data: InvoiceData) {
 
 function sameAmount(a: number | null, b: number | null) {
   if (a === null || b === null) return false;
-  return Math.abs(a - b) <= Math.max(1, Math.abs(b) * 0.001);
-}
-
-function normalizeInvoiceDate(value: unknown) {
-  const raw = String(value ?? "").trim();
-  const match = raw.match(/(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})/);
-  if (!match) return "";
-  const [, a, b, c] = match;
-  if (a.length === 4) return `${a}-${b.padStart(2, "0")}-${c.padStart(2, "0")}`;
-  if (c.length === 4) return `${c}-${b.padStart(2, "0")}-${a.padStart(2, "0")}`;
-  return "";
+  // Cent-level rounding only: $9.50 and $10.20 are different invoices.
+  return Math.abs(a - b) <= Math.max(0.011, Math.abs(b) * 0.0001);
 }
 
 function oneEditApart(a: string, b: string) {
@@ -100,28 +131,30 @@ function similarInvoiceNumber(a: string, b: string) {
   return digitsA.length >= 3 && digitsA === b.replace(/\D/g, "");
 }
 
+/** True when the trailing numbers differ by exactly one (…1001 / …1002). */
+function consecutiveNumbers(a: string, b: string) {
+  const tailA = a.match(/(\d+)$/)?.[1];
+  const tailB = b.match(/(\d+)$/)?.[1];
+  if (!tailA || !tailB || a.slice(0, a.length - tailA.length) !== b.slice(0, b.length - tailB.length)) return false;
+  return Math.abs(Number(tailA) - Number(tailB)) === 1;
+}
+
 const NEAR_DUPLICATE_MAX_DAYS = 60;
 const SEQUENCE_MAX_DAYS = 7;
-
-function daysBetween(a: string, b: string) {
-  return Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
-}
 
 export function duplicateCandidate(current: InvoiceData, candidate: InvoiceData) {
   const currentNumber = normalizeInvoiceNumber(current.invoice_number.value);
   const candidateNumber = normalizeInvoiceNumber(candidate.invoice_number.value);
 
-  const currentSupplier = supplierKey(current);
-  const candidateSupplier = supplierKey(candidate);
-  if (!currentSupplier || currentSupplier !== candidateSupplier) return null;
+  if (!sameSupplier(current, candidate)) return null;
 
   const amountMatches = sameAmount(invoiceTotal(current), invoiceTotal(candidate));
   const bothTotalsKnown = invoiceTotal(current) !== null && invoiceTotal(candidate) !== null;
-  const currentDate = normalizeInvoiceDate(current.invoice_date.value);
-  const candidateDate = normalizeInvoiceDate(candidate.invoice_date.value);
-  const bothDatesKnown = Boolean(currentDate && candidateDate);
-  const dateMatches = bothDatesKnown && currentDate === candidateDate;
-  const days = bothDatesKnown ? daysBetween(currentDate, candidateDate) : null;
+  // Ambiguous dates (03/04/2026) carry both readings; they match if any reading matches.
+  const currentDates = dateCandidates(current.invoice_date.value);
+  const candidateDates = dateCandidates(candidate.invoice_date.value);
+  const days = dayDistance(currentDates, candidateDates);
+  const dateMatches = days === 0;
   const currentCurrency = String(current.currency.value ?? "").trim().toUpperCase();
   const candidateCurrency = String(candidate.currency.value ?? "").trim().toUpperCase();
   const bothCurrenciesKnown = Boolean(currentCurrency && candidateCurrency);
@@ -133,12 +166,17 @@ export function duplicateCandidate(current: InvoiceData, candidate: InvoiceData)
   ];
 
   // Same reference (after ignoring spaces, dashes, leading zeros).
-  if (currentNumber && candidateNumber && currentNumber === candidateNumber) {
+  const identical = Boolean(currentNumber && candidateNumber && currentNumber === candidateNumber);
+  // INV-1O234 vs INV-10234: the same reference once look-alike characters are folded.
+  const lookAlike = !identical && currentNumber.length >= 3 && candidateNumber.length >= 3
+    && foldConfusables(currentNumber) === foldConfusables(candidateNumber);
+  if (identical || lookAlike) {
+    const numberSignal = lookAlike ? "invoice number (look-alike characters: 0/O, 1/I)" : "invoice number";
     if (bothTotalsKnown && !amountMatches) {
       // Same number, different amount: a revised invoice or a reused number.
-      return { matchType: "number_reused" as const, signals: ["supplier", "invoice number", "different total"] };
+      return { matchType: "number_reused" as const, signals: ["supplier", numberSignal, "different total"] };
     }
-    return { matchType: "exact" as const, signals: ["supplier", "invoice number", ...(amountMatches ? ["total"] : []), ...extras()] };
+    return { matchType: "exact" as const, signals: ["supplier", numberSignal, ...(amountMatches ? ["total"] : []), ...extras()] };
   }
 
   // Slightly changed reference + same money + plausible timing.
@@ -148,7 +186,11 @@ export function duplicateCandidate(current: InvoiceData, candidate: InvoiceData)
     // when both dates are known and within a week.
     const digitsOnlyChange = currentNumber.replace(/\d/g, "") === candidateNumber.replace(/\d/g, "");
     const withinWindow = days === null || days <= NEAR_DUPLICATE_MAX_DAYS;
-    const sequenceLike = digitsOnlyChange && (days === null || days > SEQUENCE_MAX_DAYS);
+    // 1001 and 1002 are the next invoice in the supplier's own numbering, not a
+    // changed copy: they are never a "changed reference". Issued on the same day
+    // for the same amount they still fall through to the weaker same-day rule.
+    const consecutive = digitsOnlyChange && consecutiveNumbers(currentNumber, candidateNumber);
+    const sequenceLike = consecutive || (digitsOnlyChange && (days === null || days > SEQUENCE_MAX_DAYS));
     if (withinWindow && !sequenceLike) {
       return { matchType: "similar_reference" as const, signals: ["supplier", "similar invoice number", "total", ...extras()] };
     }

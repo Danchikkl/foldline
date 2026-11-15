@@ -52,6 +52,11 @@ export async function POST(request: Request) {
   // Idempotent-looking success prevents repeated clicks and simple spam loops.
   if (recent) return Response.json({ ok: true });
 
+  // Flood guard: a script rotating email addresses cannot fill the table.
+  const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { count: lastHour } = await admin.from("pilot_requests").select("id", { count: "exact", head: true }).gte("created_at", hourAgo);
+  if ((lastHour ?? 0) >= 40) return jsonError("We are receiving many requests right now. Please try again in an hour.", 429);
+
   const { error } = await admin.from("pilot_requests").insert({
     name,
     email,

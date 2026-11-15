@@ -42,6 +42,7 @@ export async function GET(request: Request) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Cloudflare document conversion failed.";
-    return jsonError(message, 502);
+    console.error("OCR test failed", { error: message });
+    return jsonError("Document conversion failed.", 502);
   }
 }

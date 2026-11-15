@@ -157,7 +157,7 @@ export async function POST(request: Request) {
         .eq("id", doc.id)
         .eq("owner_id", user.id);
 
-      return Response.json({ ok: false, status: "failed", error: message }, { status: 502 });
+      return Response.json({ ok: false, status: "failed", error: "Document processing failed. Please try again." }, { status: 502 });
     }
   } catch (e) {
     console.error("upload-complete failed", e);
